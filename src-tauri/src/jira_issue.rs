@@ -862,7 +862,7 @@ fn normalize_issue_key(value: &str) -> Result<String, String> {
     Ok(value)
 }
 
-fn validate_jira_cloud_url(value: &str) -> Result<reqwest::Url, String> {
+pub(crate) fn validate_jira_cloud_url(value: &str) -> Result<reqwest::Url, String> {
     let mut url = reqwest::Url::parse(value.trim())
         .map_err(|_| "Jira 사이트 URL을 확인해주세요.".to_string())?;
     let host = url.host_str().unwrap_or_default().to_ascii_lowercase();

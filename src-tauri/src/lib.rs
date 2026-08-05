@@ -6,6 +6,7 @@ use tauri::{
 use tauri_plugin_positioner::{Position, WindowExt};
 use tauri_plugin_sql::{Migration, MigrationKind};
 
+mod confluence;
 mod context_discovery;
 mod github_pull_requests;
 mod google_calendar;
@@ -268,6 +269,12 @@ pub fn run() {
             sql: include_str!("../migrations/0015_slack_message_cache.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 16,
+            description: "cache_confluence_searches",
+            sql: include_str!("../migrations/0016_confluence_search_cache.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()
@@ -332,7 +339,9 @@ pub fn run() {
             google_calendar::disconnect_google_calendar,
             slack::verify_slack_connection,
             slack::search_slack_messages,
+            confluence::search_confluence_pages,
             openai_chat::stream_chat_with_orbit_context,
+            openai_chat::plan_chat_tools,
             openai_chat::cancel_chat_stream
         ])
         .run(tauri::generate_context!())

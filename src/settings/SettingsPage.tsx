@@ -22,7 +22,7 @@ type SecretId = "jira_api_token" | "google_client_secret" | "slack_oauth_token" 
 
 const tabs: Array<{ id: SettingsTab; label: string; symbol: string }> = [
   { id: "general", label: "일반", symbol: "◐" },
-  { id: "jira", label: "Jira", symbol: "J" },
+  { id: "jira", label: "Atlassian", symbol: "A" },
   { id: "google", label: "Google Calendar", symbol: "G" },
   { id: "slack", label: "Slack", symbol: "S" },
   { id: "openai", label: "OpenAI", symbol: "AI" },
@@ -120,9 +120,9 @@ export default function SettingsPage() {
         )}
         {activeTab === "jira" && (
           <ProviderSettings
-            eyebrow="JIRA CLOUD"
-            title="Jira 연결"
-            description="담당 이슈와 백로그를 Orbit으로 가져오기 위한 계정 정보입니다."
+            eyebrow="ATLASSIAN CLOUD"
+            title="Jira · Confluence 연결"
+            description="담당 Jira 이슈와 권한이 있는 Confluence 문서를 Orbit으로 가져옵니다. 두 서비스는 같은 Atlassian 계정 정보를 사용합니다."
             fields={[
               { key: "jira_url", label: "사이트 URL", placeholder: "https://team.atlassian.net", value: settings.jira_url ?? "" },
               { key: "jira_email", label: "계정 이메일", placeholder: "name@company.com", value: settings.jira_email ?? "", type: "email" },

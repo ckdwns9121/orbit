@@ -1,6 +1,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type { ChatMessage } from "../domain/chat";
 import { listCalendarEvents } from "./calendar-event-repository";
+import { searchConfluencePages } from "./confluence-page-repository";
 import { listCachedPullRequests } from "./github-pull-request-repository";
 import { listCachedJiraIssues } from "./jira-issue-repository";
 import { getAppSettings } from "./settings-repository";
@@ -24,7 +25,7 @@ export const initialContextSources: ContextSourceStatus[] = [
   { id: "jira", label: "Jira", state: "pending", detail: "탐색 대기" },
   { id: "github", label: "GitHub", state: "pending", detail: "탐색 대기" },
   { id: "slack", label: "Slack", state: "pending", detail: "메시지 탐색 대기" },
-  { id: "confluence", label: "Confluence", state: "unavailable", detail: "문서 연동 준비 중" },
+  { id: "confluence", label: "Confluence", state: "pending", detail: "문서 탐색 대기" },
 ];
 
 interface ChatStreamEvent {
@@ -45,12 +46,28 @@ export interface StreamAnswer {
   cancelled: boolean;
 }
 
+interface ChatToolPlan {
+  calls: ChatToolCall[];
+}
+
+interface ChatToolCall {
+  callId: string;
+  name: "search_slack_messages" | "search_confluence_pages";
+  arguments: unknown;
+}
+
+interface SearchToolArguments {
+  query: string;
+  dateFrom: string | null;
+  dateTo: string | null;
+}
+
 async function collectSource<T>(
   source: ContextSourceStatus,
   loader: () => Promise<T[]>,
   onSource: (source: ContextSourceStatus) => void,
 ): Promise<T[]> {
-  onSource({ ...source, state: "collecting", detail: source.id === "jira" || source.id === "github" || source.id === "slack" ? "탐색 중…" : "수집 중…" });
+  onSource({ ...source, state: "collecting", detail: source.id === "jira" || source.id === "github" || source.id === "slack" || source.id === "confluence" ? "탐색 중…" : "수집 중…" });
   try {
     const items = await loader();
     onSource({ ...source, state: "complete", count: items.length, detail: `${items.length}건 수집 완료` });
@@ -64,107 +81,102 @@ async function collectSource<T>(
 export async function buildOrbitContext(
   now = new Date(),
   onSource: (source: ContextSourceStatus) => void = () => undefined,
-  slackQuery = "",
 ): Promise<string> {
   const from = new Date(now); from.setDate(from.getDate() - 7); from.setHours(0, 0, 0, 0);
   const to = new Date(now); to.setDate(to.getDate() + 30); to.setHours(23, 59, 59, 999);
-  const availableSources = initialContextSources.filter((source) => source.state !== "unavailable");
-  initialContextSources.filter((source) => source.state === "unavailable").forEach(onSource);
-  const [tasks, events, jira, pullRequests, slackMessages] = await Promise.all([
-    collectSource(availableSources[0], listWorkItems, onSource),
-    collectSource(availableSources[1], () => listCalendarEvents(from, to), onSource),
-    collectSource(availableSources[2], listCachedJiraIssues, onSource),
-    collectSource(availableSources[3], listCachedPullRequests, onSource),
-    collectSource(availableSources[4], () => searchSlackMessages(slackQuery), onSource),
+  const source = (id: ContextSourceId) => initialContextSources.find((item) => item.id === id)!;
+  const [tasks, events, jira, pullRequests] = await Promise.all([
+    collectSource(source("tasks"), listWorkItems, onSource),
+    collectSource(source("calendar"), () => listCalendarEvents(from, to), onSource),
+    collectSource(source("jira"), listCachedJiraIssues, onSource),
+    collectSource(source("github"), listCachedPullRequests, onSource),
   ]);
   const sections = [
     `[기준 시각] ${now.toISOString()}`,
     "[Task]\n" + tasks.slice(0, 40).map((task) => `- ${task.title} | 상태=${task.status} | 다음=${task.nextAction ?? "없음"} | 체크포인트=${task.checkpoint ?? "없음"}`).join("\n"),
     "[Calendar]\n" + events.slice(0, 80).map((event) => `- ${event.startAt}~${event.endAt} | ${event.title} | 장소=${event.location ?? "없음"}${event.externalUrl ? ` | ${event.externalUrl}` : ""}`).join("\n"),
     "[Jira]\n" + jira.slice(0, 50).map((issue) => `- ${issue.key} ${issue.summary} | ${issue.status} | ${issue.url}`).join("\n"),
-    `[Slack 검색어] ${slackQuery || "없음"}\n[Slack]\n` + slackMessages.slice(0, 40).map((message) => `- #${message.channelName || message.channelId} | ${message.userName || "알 수 없음"} | ${message.text} | ${message.permalink}`).join("\n"),
     "[GitHub PR]\n" + pullRequests.slice(0, 40).map((pr) => `- ${pr.repository}#${pr.number} ${pr.title} | updated=${pr.updatedAt} | ${pr.url}`).join("\n"),
-    "[Confluence]\n- 아직 문서 수집기가 연결되지 않았습니다.",
   ];
   return sections.join("\n\n").slice(0, 60_000);
 }
 
-const slackSearchStopWords = new Set([
-  "slack", "슬랙", "다시", "찾아봐", "찾아줘", "검색해줘", "확인해줘", "알려줘",
-  "찾아줘봐", "관련", "내용", "메시지", "대화", "대화내용", "작업", "해줘", "뭐야",
-  "어떻게", "있어", "있는",
-]);
-
-function formatLocalDate(date: Date): string {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+function normalizeIsoDate(value: unknown): string | null {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const date = new Date(`${value}T00:00:00Z`);
+  return Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== value ? null : value;
 }
 
-function localDate(year: number, month: number, day: number): Date | null {
-  const date = new Date(year, month - 1, day);
-  return date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day ? date : null;
+function previousIsoDate(value: string): string {
+  const date = new Date(`${value}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() - 1);
+  return date.toISOString().slice(0, 10);
 }
 
-function addDays(date: Date, days: number): Date {
-  const result = new Date(date);
-  result.setDate(result.getDate() + days);
-  return result;
+export function parseSearchToolArguments(value: unknown): SearchToolArguments {
+  const input = typeof value === "object" && value !== null ? value as Record<string, unknown> : {};
+  return {
+    query: typeof input.query === "string" ? input.query.trim().replace(/\s+/g, " ").slice(0, 160) : "",
+    dateFrom: normalizeIsoDate(input.date_from),
+    dateTo: normalizeIsoDate(input.date_to),
+  };
 }
 
-export function buildSlackDateFilter(text: string, now = new Date()): string {
-  const exactDate = text.match(/(20\d{2})년\s*(\d{1,2})월\s*(\d{1,2})일/);
-  if (exactDate) {
-    const date = localDate(Number(exactDate[1]), Number(exactDate[2]), Number(exactDate[3]));
-    if (date) return `on:${formatLocalDate(date)}`;
-  }
-  const yearMonth = text.match(/(20\d{2})년\s*(\d{1,2})월/);
-  if (yearMonth) {
-    const start = localDate(Number(yearMonth[1]), Number(yearMonth[2]), 1);
-    if (start) return `after:${formatLocalDate(addDays(start, -1))} before:${formatLocalDate(new Date(start.getFullYear(), start.getMonth() + 1, 1))}`;
-  }
-  const year = text.match(/(20\d{2})년/);
-  if (year) return `after:${Number(year[1]) - 1}-12-31 before:${Number(year[1]) + 1}-01-01`;
-
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  if (/오늘/.test(text)) return `on:${formatLocalDate(today)}`;
-  if (/어제/.test(text)) return `on:${formatLocalDate(addDays(today, -1))}`;
-  const recentDays = text.match(/최근\s*(\d{1,3})\s*일/);
-  if (recentDays) return `after:${formatLocalDate(addDays(today, -Number(recentDays[1]) - 1))}`;
-  if (/이번\s*주/.test(text) || /금주/.test(text)) {
-    const monday = addDays(today, -((today.getDay() + 6) % 7));
-    return `after:${formatLocalDate(addDays(monday, -1))} before:${formatLocalDate(addDays(monday, 7))}`;
-  }
-  if (/지난\s*주/.test(text) || /저번\s*주/.test(text)) {
-    const thisMonday = addDays(today, -((today.getDay() + 6) % 7));
-    const lastMonday = addDays(thisMonday, -7);
-    return `after:${formatLocalDate(addDays(lastMonday, -1))} before:${formatLocalDate(thisMonday)}`;
-  }
-  return "";
+export function buildSlackToolQuery(arguments_: SearchToolArguments): string {
+  const parts = [arguments_.query];
+  if (arguments_.dateFrom) parts.push(`after:${previousIsoDate(arguments_.dateFrom)}`);
+  if (arguments_.dateTo) parts.push(`before:${arguments_.dateTo}`);
+  return parts.filter(Boolean).join(" ");
 }
 
-function removeSlackDateExpressions(text: string): string {
-  return text
-    .replace(/20\d{2}년(?:\s*\d{1,2}월(?:\s*\d{1,2}일)?)?(?:에|의|동안|으로|부터|도)?/g, " ")
-    .replace(/최근\s*\d{1,3}\s*일(?:간|동안)?|오늘|어제|이번\s*주|금주|지난\s*주|저번\s*주/g, " ");
+export function buildConfluenceToolCql(arguments_: SearchToolArguments): string {
+  const query = arguments_.query.replace(/["\\\u0000-\u001f]/g, "").trim();
+  const clauses = ["type = page", "status = current"];
+  if (query) clauses.push(`text ~ "${query}"`);
+  if (arguments_.dateFrom) clauses.push(`lastmodified >= "${arguments_.dateFrom}"`);
+  if (arguments_.dateTo) clauses.push(`lastmodified < "${arguments_.dateTo}"`);
+  return clauses.join(" AND ");
 }
 
-export function buildSlackSearchQuery(question: string, messages: ChatMessage[], now = new Date()): string {
-  const previousUserQuestions = messages.filter((message) => message.role === "user").slice(-2).reverse().map((message) => message.content);
-  const contents = [question, ...previousUserQuestions];
-  const dateFilter = contents.map((content) => buildSlackDateFilter(content, now)).find(Boolean) ?? "";
-  const tokens: string[] = [];
-  for (const content of contents) {
-    const matches = removeSlackDateExpressions(content).match(/[A-Za-z가-힣0-9][A-Za-z가-힣0-9_-]*/g) ?? [];
-    for (const rawToken of matches) {
-      const token = rawToken.replace(/^https?$/i, "");
-      const normalized = token.toLocaleLowerCase();
-      if (token.length < 2 || slackSearchStopWords.has(normalized) || /^\d+$/.test(token)) continue;
-      if (!tokens.some((item) => item.toLocaleLowerCase() === normalized)) tokens.push(token);
-      if (tokens.length === 4) break;
+async function executeToolCall(
+  call: ChatToolCall,
+  onSource: (source: ContextSourceStatus) => void,
+): Promise<{ call: Record<string, unknown>; output: Record<string, unknown> }> {
+  const arguments_ = parseSearchToolArguments(call.arguments);
+  const source = initialContextSources.find((item) => item.id === (call.name === "search_slack_messages" ? "slack" : "confluence"))!;
+  onSource({ ...source, state: "collecting", detail: `${arguments_.query || "날짜 조건"} 검색 중…` });
+  let result: unknown;
+  try {
+    if (call.name === "search_slack_messages") {
+      const messages = await searchSlackMessages(buildSlackToolQuery(arguments_));
+      result = { ok: true, messages: messages.slice(0, 30).map((message) => ({
+        channel: message.channelName || message.channelId,
+        author: message.userName,
+        text: message.text.slice(0, 1_500),
+        timestamp: message.messageTs,
+        url: message.permalink,
+      })) };
+      onSource({ ...source, state: "complete", count: messages.length, detail: `${messages.length}건 수집 완료` });
+    } else {
+      const pages = await searchConfluencePages(buildConfluenceToolCql(arguments_));
+      result = { ok: true, pages: pages.slice(0, 30).map((page) => ({
+        title: page.title,
+        space: page.spaceKey,
+        excerpt: page.excerpt.slice(0, 1_500),
+        lastModified: page.lastModified,
+        url: page.url,
+      })) };
+      onSource({ ...source, state: "complete", count: pages.length, detail: `${pages.length}건 수집 완료` });
     }
-    if (tokens.length === 4) break;
+  } catch (cause) {
+    const error = cause instanceof Error ? cause.message : String(cause);
+    result = { ok: false, error };
+    onSource({ ...source, state: "error", detail: error });
   }
-  const keywords = tokens.join(" ") || (dateFilter ? "" : question.trim().slice(0, 80));
-  return [keywords, dateFilter].filter(Boolean).join(" ");
+  return {
+    call: { type: "function_call", call_id: call.callId, name: call.name, arguments: JSON.stringify(call.arguments) },
+    output: { type: "function_call_output", call_id: call.callId, output: JSON.stringify(result) },
+  };
 }
 
 export async function streamAnswerWithOrbitContext(
@@ -172,11 +184,30 @@ export async function streamAnswerWithOrbitContext(
   messages: ChatMessage[],
   callbacks: StreamCallbacks,
 ): Promise<StreamAnswer> {
-  const slackQuery = buildSlackSearchQuery(question, messages);
-  const [settings, context] = await Promise.all([
-    getAppSettings(),
-    buildOrbitContext(new Date(), callbacks.onSource, slackQuery),
+  const settings = await getAppSettings();
+  const conversation = messages.slice(-12).map((message) => ({ role: message.role, content: message.content }));
+  const planningStatus = (id: "slack" | "confluence") => {
+    const source = initialContextSources.find((item) => item.id === id)!;
+    callbacks.onSource({ ...source, state: "collecting", detail: "AI가 검색 조건 분석 중…" });
+  };
+  planningStatus("slack");
+  planningStatus("confluence");
+  const [context, plan] = await Promise.all([
+    buildOrbitContext(new Date(), callbacks.onSource),
+    invoke<ChatToolPlan>("plan_chat_tools", {
+      model: settings.openai_model || null,
+      question,
+      conversation,
+      localDate: new Intl.DateTimeFormat("sv-SE").format(new Date()),
+    }),
   ]);
+  const executed = await Promise.all(plan.calls.map((call) => executeToolCall(call, callbacks.onSource)));
+  for (const id of ["slack", "confluence"] as const) {
+    if (!plan.calls.some((call) => call.name === (id === "slack" ? "search_slack_messages" : "search_confluence_pages"))) {
+      const source = initialContextSources.find((item) => item.id === id)!;
+      callbacks.onSource({ ...source, state: "complete", count: 0, detail: "이번 질문에는 검색 불필요" });
+    }
+  }
   if (callbacks.signal?.aborted) return { content: "", responseId: null, cancelled: true };
 
   const requestId = crypto.randomUUID();
@@ -199,11 +230,15 @@ export async function streamAnswerWithOrbitContext(
   callbacks.signal?.addEventListener("abort", cancel, { once: true });
   try {
     await invoke("stream_chat_with_orbit_context", {
-      requestId,
-      model: settings.openai_model || null,
-      question,
-      context,
-      conversation: messages.slice(-12).map((message) => ({ role: message.role, content: message.content })),
+      request: {
+        requestId,
+        model: settings.openai_model || null,
+        question,
+        context,
+        conversation,
+        toolCalls: executed.map((item) => item.call),
+        toolOutputs: executed.map((item) => item.output),
+      },
       onEvent: channel,
     });
     return { content, responseId, cancelled: cancelled || Boolean(callbacks.signal?.aborted) };
