@@ -12,6 +12,14 @@ export interface JiraIssue {
   discoveredAt: string;
 }
 
+export type JiraProgressStage = "todo" | "in_progress" | "done";
+
+export function jiraProgressStage(statusCategory: JiraIssue["statusCategory"]): JiraProgressStage {
+  if (statusCategory === "done") return "done";
+  if (statusCategory === "indeterminate") return "in_progress";
+  return "todo";
+}
+
 export interface AssignedJiraIssuesResult {
   issues: Array<Omit<JiraIssue, "discoveredAt">>;
   truncated: boolean;

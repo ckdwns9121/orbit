@@ -1,7 +1,20 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { getAppSettings, setAppSettings, type AppSettings } from "../data/settings-repository";
+import {
+  connectGoogleCalendar,
+  disconnectGoogleCalendar,
+  getGoogleCalendarConnection,
+  syncGoogleCalendar,
+  type GoogleCalendarConnection,
+} from "../data/google-calendar-repository";
 import { applyTheme, isThemePreference, type ThemePreference } from "../theme/theme";
+import {
+  emptySlackConnectionSettings,
+  readStoredSlackConnection,
+  storeSlackConnection,
+  type SlackConnection,
+} from "./slack-connection";
 import "./SettingsPage.scss";
 
 type SettingsTab = "general" | "jira" | "google" | "slack" | "openai";
@@ -125,39 +138,28 @@ export default function SettingsPage() {
           />
         )}
         {activeTab === "google" && (
-          <ProviderSettings
-            eyebrow="GOOGLE OAUTH"
-            title="Google Calendar 연결"
-            description="Google Calendar는 일반 API 키가 아니라 OAuth 클라이언트 정보로 연결합니다. 실제 Google 로그인 연결은 다음 연동 단계에서 추가할 수 있어요."
-            fields={[
-              { key: "google_client_id", label: "OAuth Client ID", placeholder: "…apps.googleusercontent.com", value: settings.google_client_id ?? "" },
-            ]}
-            secretId="google_client_secret"
-            secretLabel="OAuth Client Secret"
-            secretPlaceholder="Google OAuth 클라이언트 시크릿"
+          <GoogleCalendarSettings
+            clientId={settings.google_client_id ?? ""}
             isSecretSaved={secretStatus.google_client_secret}
-            onFieldChange={updateSetting}
-            onSave={saveValues}
-            onSaveSecret={saveSecret}
-            onDeleteSecret={deleteSecret}
+            onClientIdChange={(value) => updateSetting("google_client_id", value)}
+            onSave={async (clientId, secret) => {
+              await saveValues({ google_client_id: clientId });
+              if (secret) await saveSecret("google_client_secret", secret);
+            }}
+            onError={(cause) => setError(toMessage(cause))}
           />
         )}
         {activeTab === "slack" && (
-          <ProviderSettings
-            eyebrow="SLACK"
-            title="Slack 연결"
-            description="멘션과 확인할 메시지를 가져올 Slack 앱의 OAuth 토큰을 저장합니다."
-            fields={[
-              { key: "slack_workspace", label: "워크스페이스", placeholder: "예: orbit-team", value: settings.slack_workspace ?? "" },
-            ]}
-            secretId="slack_oauth_token"
-            secretLabel="OAuth 토큰"
-            secretPlaceholder="xoxb-… 또는 xoxp-…"
+          <SlackSettings
             isSecretSaved={secretStatus.slack_oauth_token}
-            onFieldChange={updateSetting}
-            onSave={saveValues}
-            onSaveSecret={saveSecret}
-            onDeleteSecret={deleteSecret}
+            storedConnection={readStoredSlackConnection(settings)}
+            onSaveToken={async (token) => saveSecret("slack_oauth_token", token)}
+            onVerified={async (connection) => saveValues(storeSlackConnection(connection))}
+            onDisconnect={async () => {
+              await deleteSecret("slack_oauth_token");
+              await saveValues(emptySlackConnectionSettings);
+            }}
+            onError={(cause) => setError(toMessage(cause))}
           />
         )}
         {activeTab === "openai" && (
@@ -181,6 +183,133 @@ export default function SettingsPage() {
       </section>
     </div>
   );
+}
+
+function SlackSettings({ isSecretSaved, storedConnection, onSaveToken, onVerified, onDisconnect, onError }: {
+  isSecretSaved: boolean;
+  storedConnection: SlackConnection | null;
+  onSaveToken: (token: string) => Promise<void>;
+  onVerified: (connection: SlackConnection) => Promise<void>;
+  onDisconnect: () => Promise<void>;
+  onError: (cause: unknown) => void;
+}) {
+  const [token, setToken] = useState("");
+  const [connection, setConnection] = useState<SlackConnection | null>(storedConnection);
+  const [isBusy, setIsBusy] = useState(false);
+
+  async function verify() {
+    setIsBusy(true);
+    try {
+      if (token.trim()) { await onSaveToken(token.trim()); setToken(""); }
+      const verified = await invoke<SlackConnection>("verify_slack_connection");
+      await onVerified(verified);
+      setConnection(verified);
+    } catch (cause) { onError(cause); } finally { setIsBusy(false); }
+  }
+
+  return <div className="settings-section">
+    <header><span>SLACK</span><h2>Slack 연결</h2><p>Slack User OAuth 토큰으로 워크스페이스를 연결하고 Chat 질문과 관련된 메시지를 검색합니다.</p></header>
+    <div className="provider-form">
+      <div className="connection-status"><span className={connection ? "connected" : ""} /><div><strong>{connection ? "Slack 연결됨" : isSecretSaved ? "토큰 저장됨 · 연결 확인 필요" : "Slack 연결 안 됨"}</strong><small>{connection ? `${connection.workspaceName} · ${connection.userName}` : "Slack 앱의 OAuth 토큰을 입력하세요"}</small></div></div>
+      <label>OAuth 토큰<div className="secret-field"><input type="password" value={token} autoComplete="off" placeholder={isSecretSaved ? "저장됨 · 새 토큰으로 변경할 때만 입력" : "xoxp-… 또는 xoxb-…"} onChange={(event) => setToken(event.target.value)} />{isSecretSaved && <span>••••••••</span>}</div></label>
+      <p className="secret-help">전체 대화 접근에는 xoxp- User OAuth Token과 search:read 범위가 필요합니다. 검색 결과는 10분 동안 로컬 캐시를 사용합니다.</p>
+      <div className="provider-actions">
+        {isSecretSaved && <button type="button" className="danger-button" onClick={async () => { await onDisconnect(); setConnection(null); }}>연결 해제</button>}
+        <span>{connection ? `Workspace ID ${connection.workspaceId}` : ""}</span>
+        <button type="button" className="primary-button" disabled={isBusy || (!token.trim() && !isSecretSaved)} onClick={() => void verify()}>{isBusy ? "확인 중…" : token.trim() ? "토큰 저장 후 연결" : "연결 확인"}</button>
+      </div>
+    </div>
+    <div className="security-note"><span>S</span><div><strong>Slack 앱에서 가져오는 값</strong><p>질문에서 추출한 핵심어로 관련 메시지만 검색하며 본문, 채널, 작성자, 시간과 원문 링크를 로컬에 캐시합니다.</p></div></div>
+  </div>;
+}
+
+function GoogleCalendarSettings({
+  clientId,
+  isSecretSaved,
+  onClientIdChange,
+  onSave,
+  onError,
+}: {
+  clientId: string;
+  isSecretSaved: boolean;
+  onClientIdChange: (value: string) => void;
+  onSave: (clientId: string, secret: string) => Promise<void>;
+  onError: (cause: unknown) => void;
+}) {
+  const [connection, setConnection] = useState<GoogleCalendarConnection | null>(null);
+  const [secret, setSecret] = useState("");
+  const [busyAction, setBusyAction] = useState<"connect" | "sync" | "disconnect" | null>(null);
+  const [message, setMessage] = useState("");
+
+  useEffect(() => {
+    void getGoogleCalendarConnection().then(setConnection).catch(onError);
+  }, []);
+
+  async function run(action: "connect" | "sync" | "disconnect") {
+    setBusyAction(action);
+    setMessage("");
+    try {
+      if (action === "disconnect") {
+        await disconnectGoogleCalendar();
+        setConnection(null);
+        setMessage("Google Calendar 연결을 해제했습니다.");
+        return;
+      }
+      if (!clientId.trim()) throw new Error("Google OAuth Client ID를 입력해주세요.");
+      await onSave(clientId.trim(), secret.trim());
+      setSecret("");
+      if (action === "connect") {
+        setConnection(await connectGoogleCalendar(clientId.trim()));
+        setMessage("계정 연결과 첫 일정 동기화를 완료했습니다.");
+      } else {
+        setConnection(await syncGoogleCalendar(clientId.trim()));
+        setMessage("Google Calendar를 최신 상태로 동기화했습니다.");
+      }
+    } catch (cause) {
+      const storedConnection = await getGoogleCalendarConnection().catch(() => null);
+      if (storedConnection) setConnection(storedConnection);
+      onError(cause);
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  return (
+    <div className="settings-section">
+      <header>
+        <span>GOOGLE OAUTH</span>
+        <h2>Google Calendar 연결</h2>
+        <p>Google 계정으로 로그인하면 일정 제목, 시간, 장소를 읽기 전용으로 가져옵니다. 수정하거나 삭제하지 않습니다.</p>
+      </header>
+      <div className="provider-form google-calendar-form">
+        <div className="connection-status">
+          <span className={connection ? "connected" : ""} />
+          <div>
+            <strong>{connection ? "Google Calendar 연결됨" : "Google 계정 연결 안 됨"}</strong>
+            <small>{connection ? connection.email : "OAuth 클라이언트 정보를 저장한 뒤 로그인하세요"}</small>
+          </div>
+          {connection?.lastSyncedAt && <time>최근 동기화 {formatSyncTime(connection.lastSyncedAt)}</time>}
+        </div>
+        <label>OAuth Client ID<input value={clientId} placeholder="…apps.googleusercontent.com" onChange={(event) => onClientIdChange(event.target.value)} /></label>
+        <label>OAuth Client Secret <em>선택</em><div className="secret-field"><input type="password" value={secret} autoComplete="off" placeholder={isSecretSaved ? "저장됨 · 변경할 때만 입력" : "Desktop OAuth 시크릿 (선택)"} onChange={(event) => setSecret(event.target.value)} />{isSecretSaved && <span>••••••••</span>}</div></label>
+        <p className="secret-help">Google Cloud에서 OAuth 동의 화면과 ‘데스크톱 앱’ 클라이언트를 만든 뒤 입력하세요. 갱신 토큰과 시크릿은 macOS Keychain에만 저장됩니다.</p>
+        <div className="provider-actions google-actions">
+          {connection && <button type="button" className="danger-button" disabled={busyAction !== null} onClick={() => void run("disconnect")}>{busyAction === "disconnect" ? "해제 중…" : "연결 해제"}</button>}
+          <span>{message}</span>
+          {connection ? (
+            <button type="button" className="primary-button" disabled={busyAction !== null} onClick={() => void run("sync")}>{busyAction === "sync" ? "동기화 중…" : "지금 동기화"}</button>
+          ) : (
+            <button type="button" className="primary-button" disabled={busyAction !== null || !clientId.trim()} onClick={() => void run("connect")}>{busyAction === "connect" ? "브라우저 로그인 대기 중…" : "Google 계정 연결"}</button>
+          )}
+        </div>
+      </div>
+      <div className="security-note"><span>G</span><div><strong>Google Cloud 준비</strong><p>Google Calendar API를 활성화하고 OAuth 클라이언트 유형을 ‘데스크톱 앱’으로 만드세요. 리디렉션은 로그인할 때 Orbit이 localhost 포트를 자동으로 엽니다.</p></div></div>
+    </div>
+  );
+}
+
+function formatSyncTime(value: string) {
+  return new Intl.DateTimeFormat("ko-KR", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(value));
 }
 
 function GeneralSettings({ theme, onChange }: { theme: ThemePreference; onChange: (theme: ThemePreference) => Promise<void> }) {

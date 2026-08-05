@@ -1,3 +1,4 @@
+use std::{collections::HashMap, sync::{Mutex, OnceLock}};
 use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Manager, WindowEvent,
@@ -5,18 +6,60 @@ use tauri::{
 use tauri_plugin_positioner::{Position, WindowExt};
 use tauri_plugin_sql::{Migration, MigrationKind};
 
+mod context_discovery;
 mod github_pull_requests;
+mod google_calendar;
 mod jira_issue;
 mod local_ai_sessions;
+mod openai_chat;
+mod slack;
 
 const KEYCHAIN_SERVICE: &str = "com.orbit.desktop";
+static SECRET_CACHE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+
+fn secret_cache() -> &'static Mutex<HashMap<String, String>> {
+    SECRET_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn cached_secret(secret_id: &str) -> Result<Option<String>, String> {
+    secret_cache()
+        .lock()
+        .map(|cache| cache.get(secret_id).cloned())
+        .map_err(|_| "자격 증명 메모리 캐시를 읽지 못했습니다.".to_string())
+}
+
+fn cache_secret(secret_id: &str, value: &str) -> Result<(), String> {
+    secret_cache()
+        .lock()
+        .map(|mut cache| { cache.insert(secret_id.to_owned(), value.to_owned()); })
+        .map_err(|_| "자격 증명 메모리 캐시를 갱신하지 못했습니다.".to_string())
+}
+
+fn remove_cached_secret(secret_id: &str) -> Result<(), String> {
+    secret_cache()
+        .lock()
+        .map(|mut cache| { cache.remove(secret_id); })
+        .map_err(|_| "자격 증명 메모리 캐시를 정리하지 못했습니다.".to_string())
+}
 
 fn validate_secret_id(secret_id: &str) -> Result<(), String> {
     match secret_id {
-        "jira_api_token" | "google_client_secret" | "slack_oauth_token" | "openai_api_key" => {
+        "jira_api_token" | "google_client_secret" | "google_refresh_token" | "slack_oauth_token" | "openai_api_key" => {
             Ok(())
         }
         _ => Err("지원하지 않는 보안 항목입니다.".into()),
+    }
+}
+
+fn set_internal_secret(secret_id: &str, value: &str) -> Result<(), String> {
+    keychain_entry(secret_id)?.set_password(value).map_err(|error| error.to_string())?;
+    cache_secret(secret_id, value)
+}
+
+fn delete_internal_secret(secret_id: &str) -> Result<(), String> {
+    match keychain_entry(secret_id)?.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => remove_cached_secret(secret_id),
+        Err(error) => Err(error.to_string()),
     }
 }
 
@@ -26,8 +69,15 @@ fn keychain_entry(secret_id: &str) -> Result<keyring::Entry, String> {
 }
 
 fn get_secret(secret_id: &str) -> Result<String, String> {
+    validate_secret_id(secret_id)?;
+    if let Some(value) = cached_secret(secret_id)? {
+        return Ok(value);
+    }
     match keychain_entry(secret_id)?.get_password() {
-        Ok(value) if !value.is_empty() => Ok(value),
+        Ok(value) if !value.is_empty() => {
+            cache_secret(secret_id, &value)?;
+            Ok(value)
+        }
         Ok(_) | Err(keyring::Error::NoEntry) => {
             Err("저장된 자격 증명이 없습니다. Settings에서 한 번 저장해주세요.".into())
         }
@@ -37,11 +87,34 @@ fn get_secret(secret_id: &str) -> Result<String, String> {
     }
 }
 
+fn get_optional_secret(secret_id: &str) -> Result<Option<String>, String> {
+    validate_secret_id(secret_id)?;
+    if let Some(value) = cached_secret(secret_id)? {
+        return Ok(Some(value));
+    }
+    match keychain_entry(secret_id)?.get_password() {
+        Ok(value) if !value.is_empty() => {
+            cache_secret(secret_id, &value)?;
+            Ok(Some(value))
+        }
+        Ok(_) | Err(keyring::Error::NoEntry) => Ok(None),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
 #[tauri::command]
 fn secret_status(secret_id: String) -> Result<bool, String> {
+    validate_secret_id(&secret_id)?;
+    if cached_secret(&secret_id)?.is_some() {
+        return Ok(true);
+    }
     let entry = keychain_entry(&secret_id)?;
     match entry.get_password() {
-        Ok(value) => Ok(!value.is_empty()),
+        Ok(value) if !value.is_empty() => {
+            cache_secret(&secret_id, &value)?;
+            Ok(true)
+        }
+        Ok(_) => Ok(false),
         Err(keyring::Error::NoEntry) => Ok(false),
         Err(error) => Err(error.to_string()),
     }
@@ -53,26 +126,32 @@ fn set_secret(secret_id: String, value: String) -> Result<(), String> {
         return Err("비어 있는 값은 저장할 수 없습니다.".into());
     }
 
-    let entry = keychain_entry(&secret_id)?;
-    entry
+    keychain_entry(&secret_id)?
         .set_password(&value)
         .map_err(|error| error.to_string())?;
-
-    match entry.get_password() {
-        Ok(saved) if saved == value => Ok(()),
-        Ok(_) => Err("Keychain 저장 결과를 검증하지 못했습니다.".into()),
-        Err(error) => Err(format!(
-            "Keychain에 저장한 값을 다시 읽지 못했습니다. ({error})"
-        )),
-    }
+    cache_secret(&secret_id, &value)
 }
 
 #[tauri::command]
 fn delete_secret(secret_id: String) -> Result<(), String> {
     let entry = keychain_entry(&secret_id)?;
     match entry.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Ok(()) | Err(keyring::Error::NoEntry) => remove_cached_secret(&secret_id),
         Err(error) => Err(error.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod secret_cache_tests {
+    use super::{cache_secret, cached_secret, remove_cached_secret};
+
+    #[test]
+    fn reuses_and_removes_cached_credentials() {
+        let secret_id = "test_memory_only_secret";
+        cache_secret(secret_id, "value").expect("cache secret");
+        assert_eq!(cached_secret(secret_id).expect("read cache").as_deref(), Some("value"));
+        remove_cached_secret(secret_id).expect("remove cache");
+        assert!(cached_secret(secret_id).expect("read empty cache").is_none());
     }
 }
 
@@ -165,6 +244,30 @@ pub fn run() {
             sql: include_str!("../migrations/0011_jira_issues.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 12,
+            description: "cache_jira_development_context",
+            sql: include_str!("../migrations/0012_jira_development_cache.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 13,
+            description: "create_google_calendar_sync",
+            sql: include_str!("../migrations/0013_google_calendar_sync.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 14,
+            description: "create_chat_threads",
+            sql: include_str!("../migrations/0014_chat_threads.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 15,
+            description: "cache_slack_message_searches",
+            sql: include_str!("../migrations/0015_slack_message_cache.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()
@@ -220,9 +323,17 @@ pub fn run() {
             set_secret,
             delete_secret,
             local_ai_sessions::scan_local_ai_sessions,
+            context_discovery::rank_task_context,
             github_pull_requests::scan_session_pull_requests,
             jira_issue::fetch_jira_issue_development,
-            jira_issue::fetch_assigned_jira_issues
+            jira_issue::fetch_assigned_jira_issues,
+            google_calendar::connect_google_calendar,
+            google_calendar::sync_google_calendar,
+            google_calendar::disconnect_google_calendar,
+            slack::verify_slack_connection,
+            slack::search_slack_messages,
+            openai_chat::stream_chat_with_orbit_context,
+            openai_chat::cancel_chat_stream
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

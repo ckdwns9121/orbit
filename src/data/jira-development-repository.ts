@@ -1,7 +1,37 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { JiraIssueDevelopment } from "../domain/jira-development";
+import type {
+  CachedJiraIssueDevelopment,
+  JiraIssueDevelopment,
+} from "../domain/jira-development";
 import { getAppSettings } from "./settings-repository";
 import { getDatabase } from "./database";
+
+interface JiraDevelopmentCacheRow {
+  payload: string;
+  synced_at: string;
+}
+
+export async function getCachedJiraIssueDevelopment(
+  issueKey: string,
+): Promise<CachedJiraIssueDevelopment | null> {
+  const database = await getDatabase();
+  const rows = await database.select<JiraDevelopmentCacheRow[]>(
+    `SELECT payload, synced_at
+     FROM jira_development_cache
+     WHERE issue_key = $1`,
+    [issueKey],
+  );
+  const row = rows[0];
+  if (!row) return null;
+  try {
+    return {
+      development: JSON.parse(row.payload) as JiraIssueDevelopment,
+      syncedAt: row.synced_at,
+    };
+  } catch {
+    return null;
+  }
+}
 
 export async function syncJiraIssueDevelopment(
   workItemId: string,
@@ -69,6 +99,15 @@ export async function syncJiraIssueDevelopment(
       ],
     );
   }
+
+  await database.execute(
+    `INSERT INTO jira_development_cache (issue_key, payload, synced_at)
+     VALUES ($1, $2, $3)
+     ON CONFLICT(issue_key) DO UPDATE SET
+       payload = excluded.payload,
+       synced_at = excluded.synced_at`,
+    [result.issue.key, JSON.stringify(result), syncedAt],
+  );
 
   return result;
 }
