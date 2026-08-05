@@ -73,7 +73,7 @@ export async function listWorkItems(): Promise<WorkItem[]> {
   return rows.map(toWorkItem);
 }
 
-export async function createWorkItem(input: CreateWorkItemInput): Promise<void> {
+export async function createWorkItem(input: CreateWorkItemInput): Promise<string> {
   const database = await getDatabase();
   const now = new Date().toISOString();
   const id = crypto.randomUUID();
@@ -94,7 +94,7 @@ export async function createWorkItem(input: CreateWorkItemInput): Promise<void> 
     `INSERT INTO work_items (
       id, title, status, priority, source, goal, next_action, done_definition,
       position, created_at, updated_at
-    ) VALUES ($1, $2, $3, $4, 'local', $5, $6, $7, $8, $9, $9)`,
+    ) VALUES ($1, $2, $3, $4, 'orbit', $5, $6, $7, $8, $9, $9)`,
     [
       id,
       input.title.trim(),
@@ -107,12 +107,24 @@ export async function createWorkItem(input: CreateWorkItemInput): Promise<void> 
       now,
     ],
   );
+  return id;
 }
 
 export async function moveWorkItem(id: string, status: WorkItemStatus): Promise<void> {
   const database = await getDatabase();
   const now = new Date().toISOString();
   const completedAt = status === "done" ? now : null;
+
+  if (status === "done") {
+    const [{ total, unfinished }] = await database.select<Array<{ total: number; unfinished: number }>>(
+      `SELECT COUNT(*) AS total,
+        SUM(CASE WHEN completion_state = 'done' THEN 0 ELSE 1 END) AS unfinished
+       FROM ai_sessions WHERE linked_work_item_id = $1`,
+      [id],
+    );
+    if (total === 0) throw new Error("Task를 완료하려면 AI 작업 세션을 하나 이상 연결해주세요.");
+    if (unfinished > 0) throw new Error(`연결된 AI 작업 세션 ${unfinished}개가 아직 진행 중입니다.`);
+  }
 
   if (status === "focus") {
     await database.execute(
@@ -144,4 +156,19 @@ export async function updateCheckpoint(
      WHERE id = $4`,
     [checkpoint.trim() || null, nextAction.trim() || null, new Date().toISOString(), id],
   );
+}
+
+export async function updateWorkItemTitle(id: string, title: string): Promise<void> {
+  const normalized = title.trim();
+  if (!normalized) throw new Error("작업 이름은 비워둘 수 없습니다.");
+  const database = await getDatabase();
+  await database.execute(
+    "UPDATE work_items SET title = $1, updated_at = $2 WHERE id = $3",
+    [normalized, new Date().toISOString(), id],
+  );
+}
+
+export async function deleteWorkItem(id: string): Promise<void> {
+  const database = await getDatabase();
+  await database.execute("DELETE FROM work_items WHERE id = $1", [id]);
 }

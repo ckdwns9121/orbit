@@ -5,11 +5,17 @@ use tauri::{
 use tauri_plugin_positioner::{Position, WindowExt};
 use tauri_plugin_sql::{Migration, MigrationKind};
 
+mod github_pull_requests;
+mod jira_issue;
+mod local_ai_sessions;
+
 const KEYCHAIN_SERVICE: &str = "com.orbit.desktop";
 
 fn validate_secret_id(secret_id: &str) -> Result<(), String> {
     match secret_id {
-        "jira_api_token" | "google_client_secret" | "slack_oauth_token" | "openai_api_key" => Ok(()),
+        "jira_api_token" | "google_client_secret" | "slack_oauth_token" | "openai_api_key" => {
+            Ok(())
+        }
         _ => Err("지원하지 않는 보안 항목입니다.".into()),
     }
 }
@@ -17,6 +23,18 @@ fn validate_secret_id(secret_id: &str) -> Result<(), String> {
 fn keychain_entry(secret_id: &str) -> Result<keyring::Entry, String> {
     validate_secret_id(secret_id)?;
     keyring::Entry::new(KEYCHAIN_SERVICE, secret_id).map_err(|error| error.to_string())
+}
+
+fn get_secret(secret_id: &str) -> Result<String, String> {
+    match keychain_entry(secret_id)?.get_password() {
+        Ok(value) if !value.is_empty() => Ok(value),
+        Ok(_) | Err(keyring::Error::NoEntry) => {
+            Err("저장된 자격 증명이 없습니다. Settings에서 한 번 저장해주세요.".into())
+        }
+        Err(error) => Err(format!(
+            "macOS Keychain에서 자격 증명을 읽지 못했습니다. Orbit의 Keychain 접근을 허용해주세요. ({error})"
+        )),
+    }
 }
 
 #[tauri::command]
@@ -35,9 +53,18 @@ fn set_secret(secret_id: String, value: String) -> Result<(), String> {
         return Err("비어 있는 값은 저장할 수 없습니다.".into());
     }
 
-    keychain_entry(&secret_id)?
+    let entry = keychain_entry(&secret_id)?;
+    entry
         .set_password(&value)
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+
+    match entry.get_password() {
+        Ok(saved) if saved == value => Ok(()),
+        Ok(_) => Err("Keychain 저장 결과를 검증하지 못했습니다.".into()),
+        Err(error) => Err(format!(
+            "Keychain에 저장한 값을 다시 읽지 못했습니다. ({error})"
+        )),
+    }
 }
 
 #[tauri::command]
@@ -88,6 +115,54 @@ pub fn run() {
             version: 3,
             description: "create_app_settings",
             sql: include_str!("../migrations/0003_app_settings.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 4,
+            description: "create_ai_sessions",
+            sql: include_str!("../migrations/0004_ai_sessions.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 5,
+            description: "create_work_item_links",
+            sql: include_str!("../migrations/0005_work_item_links.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 6,
+            description: "add_session_alias_and_commit_links",
+            sql: include_str!("../migrations/0006_session_alias_and_commit_links.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 7,
+            description: "simplify_task_flow",
+            sql: include_str!("../migrations/0007_simplify_task_flow.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 8,
+            description: "add_task_delete_cleanup",
+            sql: include_str!("../migrations/0008_task_delete_cleanup.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 9,
+            description: "create_github_pull_request_cache",
+            sql: include_str!("../migrations/0009_github_pull_requests.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 10,
+            description: "scope_pull_requests_to_active_github_user",
+            sql: include_str!("../migrations/0010_scope_pull_requests_to_viewer.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 11,
+            description: "create_jira_issue_cache",
+            sql: include_str!("../migrations/0011_jira_issues.sql"),
             kind: MigrationKind::Up,
         },
     ];
@@ -143,7 +218,11 @@ pub fn run() {
             hide_tray_window,
             secret_status,
             set_secret,
-            delete_secret
+            delete_secret,
+            local_ai_sessions::scan_local_ai_sessions,
+            github_pull_requests::scan_session_pull_requests,
+            jira_issue::fetch_jira_issue_development,
+            jira_issue::fetch_assigned_jira_issues
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

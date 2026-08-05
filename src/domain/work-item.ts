@@ -10,7 +10,7 @@ export const workItemStatuses = [
 
 export type WorkItemStatus = (typeof workItemStatuses)[number];
 export type WorkItemPriority = "p1" | "p2" | "p3";
-export type WorkItemSource = "local" | "jira" | "github" | "slack" | "calendar";
+export type WorkItemSource = "orbit" | "local" | "jira" | "github" | "slack" | "calendar";
 
 export interface WorkItem {
   id: string;
@@ -45,7 +45,7 @@ export const statusMeta: Record<
 > = {
   focus: { label: "지금 집중 중", shortLabel: "집중", order: 0 },
   review: { label: "내 확인 필요", shortLabel: "확인", order: 1 },
-  ai_running: { label: "AI 작업 중", shortLabel: "AI", order: 2 },
+  ai_running: { label: "진행 중", shortLabel: "진행", order: 2 },
   todo: { label: "할 일", shortLabel: "할 일", order: 3 },
   blocked: { label: "막힘", shortLabel: "막힘", order: 4 },
   inbox: { label: "Inbox", shortLabel: "Inbox", order: 5 },
