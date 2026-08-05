@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     env,
     path::{Path, PathBuf},
     process::Command,
@@ -14,8 +14,10 @@ const MAX_REPOSITORIES: usize = 12;
 #[serde(rename_all = "camelCase")]
 pub struct JiraIssueDevelopment {
     issue: JiraIssue,
+    branches: Vec<LinkedBranch>,
     pull_requests: Vec<LinkedPullRequest>,
     commits: Vec<LinkedCommit>,
+    builds: Vec<LinkedBuild>,
     warnings: Vec<String>,
 }
 
@@ -66,6 +68,14 @@ pub struct LinkedPullRequest {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct LinkedBranch {
+    repository: String,
+    name: String,
+    url: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LinkedCommit {
     repository: String,
     sha: String,
@@ -73,6 +83,23 @@ pub struct LinkedCommit {
     url: String,
     author_name: Option<String>,
     authored_at: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LinkedBuild {
+    repository: String,
+    id: u64,
+    name: String,
+    url: String,
+    status: String,
+    conclusion: Option<String>,
+    branch: String,
+    created_at: String,
+}
+
+struct GithubClient {
+    token: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -148,6 +175,13 @@ struct GhCommitSearchResult {
 }
 
 #[derive(Debug, Deserialize)]
+struct GhPullCommitResult {
+    sha: String,
+    html_url: String,
+    commit: GhCommitData,
+}
+
+#[derive(Debug, Deserialize)]
 struct GhCommitData {
     message: String,
     author: Option<GhCommitAuthor>,
@@ -157,6 +191,41 @@ struct GhCommitData {
 struct GhCommitAuthor {
     name: Option<String>,
     date: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GhRepositorySearchItem {
+    repository: GhSearchRepository,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GhSearchRepository {
+    name_with_owner: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GhAuthStatus {
+    hosts: HashMap<String, Vec<GhAuthAccount>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GhAuthAccount {
+    login: String,
+    state: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GhWorkflowRun {
+    database_id: u64,
+    workflow_name: String,
+    display_title: String,
+    url: String,
+    status: String,
+    conclusion: Option<String>,
+    head_branch: String,
+    created_at: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -322,25 +391,59 @@ fn fetch(
     let Some(gh) = find_executable("gh", &["/opt/homebrew/bin/gh", "/usr/local/bin/gh"]) else {
         return Ok(JiraIssueDevelopment {
             issue: jira_issue(response, browse_url),
+            branches: Vec::new(),
             pull_requests: Vec::new(),
             commits: Vec::new(),
+            builds: Vec::new(),
             warnings: vec!["GitHub CLI(gh)를 찾지 못해 PR과 커밋을 조회하지 못했습니다.".into()],
         });
     };
 
-    let mut pull_requests = Vec::new();
-    let mut commits = Vec::new();
+    let clients = github_clients(&gh);
     let mut warnings = Vec::new();
-    for repository in repositories {
-        match github_pull_requests(&gh, &repository, &issue_key) {
-            Ok(items) => pull_requests.extend(items),
-            Err(message) => warnings.push(format!("{repository}: {message}")),
-        }
-        match github_commits(&gh, &repository, &issue_key) {
-            Ok(items) => commits.extend(items),
-            Err(message) => warnings.push(format!("{repository}: {message}")),
+    let mut repository_names: HashSet<String> = repositories.into_iter().collect();
+    for client in &clients {
+        match discover_issue_repositories(&gh, client, &issue_key) {
+            Ok(items) => repository_names.extend(items),
+            Err(message) => warnings_push_unique(&mut warnings, message),
         }
     }
+
+    let mut pull_requests = Vec::new();
+    let mut commits = Vec::new();
+    for repository in repository_names {
+        let mut repository_succeeded = false;
+        for client in &clients {
+            if let Ok(items) = github_pull_requests(&gh, client, &repository, &issue_key) {
+                repository_succeeded = true;
+                pull_requests.extend(items);
+            }
+            if let Ok(items) = github_commits(&gh, client, &repository, &issue_key) {
+                repository_succeeded = true;
+                commits.extend(items);
+            }
+        }
+        if !repository_succeeded {
+            warnings_push_unique(
+                &mut warnings,
+                format!("{repository}: 연결된 GitHub 계정으로 개발 정보를 조회하지 못했습니다."),
+            );
+        }
+    }
+    deduplicate_pull_requests(&mut pull_requests);
+    for pull_request in &pull_requests {
+        for client in &clients {
+            if let Ok(items) = github_pull_request_commits(
+                &gh,
+                client,
+                &pull_request.repository,
+                pull_request.number,
+            ) {
+                commits.extend(items);
+            }
+        }
+    }
+    deduplicate_commits(&mut commits);
     pull_requests.sort_by(|left, right| {
         left.repository
             .cmp(&right.repository)
@@ -348,10 +451,48 @@ fn fetch(
     });
     commits.sort_by(|left, right| right.authored_at.cmp(&left.authored_at));
 
+    let mut branches: Vec<LinkedBranch> = pull_requests
+        .iter()
+        .map(|pull_request| LinkedBranch {
+            repository: pull_request.repository.clone(),
+            name: pull_request.head_ref_name.clone(),
+            url: format!(
+                "https://github.com/{}/tree/{}",
+                pull_request.repository, pull_request.head_ref_name
+            ),
+        })
+        .collect();
+    branches.sort_by(|left, right| {
+        left.repository
+            .cmp(&right.repository)
+            .then(left.name.cmp(&right.name))
+    });
+    branches.dedup_by(|left, right| left.repository == right.repository && left.name == right.name);
+
+    let mut builds = Vec::new();
+    for branch in &branches {
+        for client in &clients {
+            if let Ok(items) = github_builds(&gh, client, &branch.repository, &branch.name) {
+                builds.extend(items);
+            }
+        }
+    }
+    builds.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+    builds.dedup_by(|left, right| left.repository == right.repository && left.id == right.id);
+
+    if branches.is_empty() && commits.is_empty() && pull_requests.is_empty() {
+        warnings_push_unique(
+            &mut warnings,
+            format!("GitHub에서 {issue_key}가 포함된 브랜치·커밋·PR을 찾지 못했습니다."),
+        );
+    }
+
     Ok(JiraIssueDevelopment {
         issue: jira_issue(response, browse_url),
+        branches,
         pull_requests,
         commits,
+        builds,
         warnings,
     })
 }
@@ -377,11 +518,14 @@ fn jira_status_error(status: u16) -> String {
 
 fn github_pull_requests(
     gh: &Path,
+    client: &GithubClient,
     repository: &str,
     issue_key: &str,
 ) -> Result<Vec<LinkedPullRequest>, String> {
-    let output = Command::new(gh)
-        .args([
+    let output = github_output(
+        gh,
+        client,
+        &[
             "pr",
             "list",
             "--repo",
@@ -394,9 +538,8 @@ fn github_pull_requests(
             issue_key,
             "--json",
             "number,title,url,state,headRefName,author",
-        ])
-        .output()
-        .map_err(|_| "PR 조회 명령을 실행하지 못했습니다.".to_string())?;
+        ],
+    )?;
     if !output.status.success() {
         return Err("PR을 조회하지 못했습니다.".into());
     }
@@ -423,11 +566,14 @@ fn github_pull_requests(
 
 fn github_commits(
     gh: &Path,
+    client: &GithubClient,
     repository: &str,
     issue_key: &str,
 ) -> Result<Vec<LinkedCommit>, String> {
-    let output = Command::new(gh)
-        .args([
+    let output = github_output(
+        gh,
+        client,
+        &[
             "search",
             "commits",
             issue_key,
@@ -437,9 +583,8 @@ fn github_commits(
             "30",
             "--json",
             "sha,url,commit",
-        ])
-        .output()
-        .map_err(|_| "커밋 조회 명령을 실행하지 못했습니다.".to_string())?;
+        ],
+    )?;
     if !output.status.success() {
         return Err("커밋을 조회하지 못했습니다.".into());
     }
@@ -466,6 +611,189 @@ fn github_commits(
             authored_at: item.commit.author.and_then(|author| author.date),
         })
         .collect())
+}
+
+fn github_pull_request_commits(
+    gh: &Path,
+    client: &GithubClient,
+    repository: &str,
+    pull_request_number: u64,
+) -> Result<Vec<LinkedCommit>, String> {
+    let endpoint = format!("repos/{repository}/pulls/{pull_request_number}/commits?per_page=100");
+    let output = github_output(gh, client, &["api", &endpoint])?;
+    if !output.status.success() {
+        return Err("PR 커밋을 조회하지 못했습니다.".into());
+    }
+    let items: Vec<GhPullCommitResult> = serde_json::from_slice(&output.stdout)
+        .map_err(|_| "PR 커밋 응답을 읽지 못했습니다.".to_string())?;
+    Ok(items
+        .into_iter()
+        .map(|item| LinkedCommit {
+            repository: repository.into(),
+            sha: item.sha,
+            message: item
+                .commit
+                .message
+                .lines()
+                .next()
+                .unwrap_or("제목 없는 커밋")
+                .to_string(),
+            url: item.html_url,
+            author_name: item
+                .commit
+                .author
+                .as_ref()
+                .and_then(|author| author.name.clone()),
+            authored_at: item.commit.author.and_then(|author| author.date),
+        })
+        .collect())
+}
+
+fn github_builds(
+    gh: &Path,
+    client: &GithubClient,
+    repository: &str,
+    branch: &str,
+) -> Result<Vec<LinkedBuild>, String> {
+    let output = github_output(
+        gh,
+        client,
+        &[
+            "run",
+            "list",
+            "--repo",
+            repository,
+            "--branch",
+            branch,
+            "--limit",
+            "100",
+            "--json",
+            "databaseId,workflowName,displayTitle,url,status,conclusion,headBranch,createdAt",
+        ],
+    )?;
+    if !output.status.success() {
+        return Err("빌드를 조회하지 못했습니다.".into());
+    }
+    let items: Vec<GhWorkflowRun> = serde_json::from_slice(&output.stdout)
+        .map_err(|_| "빌드 응답을 읽지 못했습니다.".to_string())?;
+    Ok(items
+        .into_iter()
+        .map(|item| LinkedBuild {
+            repository: repository.into(),
+            id: item.database_id,
+            name: if item.workflow_name.trim().is_empty() {
+                item.display_title
+            } else {
+                item.workflow_name
+            },
+            url: item.url,
+            status: item.status,
+            conclusion: item.conclusion,
+            branch: item.head_branch,
+            created_at: item.created_at,
+        })
+        .collect())
+}
+
+fn github_clients(gh: &Path) -> Vec<GithubClient> {
+    let Ok(output) = Command::new(gh)
+        .args(["auth", "status", "--json", "hosts"])
+        .output()
+    else {
+        return vec![GithubClient { token: None }];
+    };
+    let Ok(status) = serde_json::from_slice::<GhAuthStatus>(&output.stdout) else {
+        return vec![GithubClient { token: None }];
+    };
+    let mut clients = Vec::new();
+    for account in status.hosts.get("github.com").into_iter().flatten() {
+        if account.state != "success" {
+            continue;
+        }
+        let Ok(token_output) = Command::new(gh)
+            .args(["auth", "token", "--user", &account.login])
+            .output()
+        else {
+            continue;
+        };
+        if token_output.status.success() {
+            let token = String::from_utf8_lossy(&token_output.stdout)
+                .trim()
+                .to_string();
+            if !token.is_empty() {
+                clients.push(GithubClient { token: Some(token) });
+            }
+        }
+    }
+    if clients.is_empty() {
+        clients.push(GithubClient { token: None });
+    }
+    clients
+}
+
+fn discover_issue_repositories(
+    gh: &Path,
+    client: &GithubClient,
+    issue_key: &str,
+) -> Result<Vec<String>, String> {
+    let mut repositories = HashSet::new();
+    for entity in ["prs", "commits"] {
+        let output = github_output(
+            gh,
+            client,
+            &[
+                "search",
+                entity,
+                issue_key,
+                "--limit",
+                "100",
+                "--json",
+                "repository",
+            ],
+        )?;
+        if !output.status.success() {
+            continue;
+        }
+        let items: Vec<GhRepositorySearchItem> = serde_json::from_slice(&output.stdout)
+            .map_err(|_| "GitHub 저장소 검색 응답을 읽지 못했습니다.".to_string())?;
+        repositories.extend(
+            items
+                .into_iter()
+                .map(|item| item.repository.name_with_owner),
+        );
+    }
+    Ok(repositories.into_iter().take(MAX_REPOSITORIES).collect())
+}
+
+fn github_output(
+    gh: &Path,
+    client: &GithubClient,
+    args: &[&str],
+) -> Result<std::process::Output, String> {
+    let mut command = Command::new(gh);
+    command.args(args);
+    if let Some(token) = &client.token {
+        command.env("GH_TOKEN", token);
+    }
+    command
+        .output()
+        .map_err(|_| "GitHub CLI 명령을 실행하지 못했습니다.".to_string())
+}
+
+fn deduplicate_pull_requests(items: &mut Vec<LinkedPullRequest>) {
+    let mut seen = HashSet::new();
+    items.retain(|item| seen.insert((item.repository.clone(), item.number)));
+}
+
+fn deduplicate_commits(items: &mut Vec<LinkedCommit>) {
+    let mut seen = HashSet::new();
+    items.retain(|item| seen.insert((item.repository.clone(), item.sha.clone())));
+}
+
+fn warnings_push_unique(warnings: &mut Vec<String>, message: String) {
+    if !warnings.contains(&message) {
+        warnings.push(message);
+    }
 }
 
 fn discover_repositories(cwds: Vec<String>) -> Result<Vec<String>, String> {
@@ -591,7 +919,7 @@ fn github_repository_slug(remote: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_issue_key, validate_jira_cloud_url};
+    use super::{normalize_issue_key, validate_jira_cloud_url, GhRepositorySearchItem};
 
     #[test]
     fn validates_jira_issue_keys() {
@@ -603,5 +931,17 @@ mod tests {
     fn only_accepts_atlassian_cloud_urls() {
         assert!(validate_jira_cloud_url("https://team.atlassian.net").is_ok());
         assert!(validate_jira_cloud_url("https://example.com").is_err());
+    }
+
+    #[test]
+    fn parses_repository_from_github_search_results() {
+        let items: Vec<GhRepositorySearchItem> = serde_json::from_str(
+            r#"[{"repository":{"name":"cgkr_mobile_ui","nameWithOwner":"colosseumcoinckr/cgkr_mobile_ui"}}]"#,
+        )
+        .unwrap();
+        assert_eq!(
+            items[0].repository.name_with_owner,
+            "colosseumcoinckr/cgkr_mobile_ui"
+        );
     }
 }

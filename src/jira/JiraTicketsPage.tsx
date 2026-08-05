@@ -1,7 +1,12 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { WorkItem } from "../domain/work-item";
-import type { JiraIssue, JiraTaskLink } from "../domain/jira-issue";
+import {
+  jiraProgressStage,
+  type JiraIssue,
+  type JiraProgressStage,
+  type JiraTaskLink,
+} from "../domain/jira-issue";
 import {
   listCachedJiraIssues,
   listJiraTaskLinks,
@@ -12,9 +17,14 @@ import { listAiSessions } from "../data/ai-session-repository";
 import { syncJiraIssueDevelopment } from "../data/jira-development-repository";
 import "./JiraTicketsPage.scss";
 
-type Filter = "all" | "active" | "done" | "linked";
+type Filter = "all" | JiraProgressStage | "linked";
 const ROW_HEIGHT = 82;
 const OVERSCAN = 5;
+const progressCards: Array<{ stage: JiraProgressStage; label: string }> = [
+  { stage: "todo", label: "해야 할 일" },
+  { stage: "in_progress", label: "진행 중" },
+  { stage: "done", label: "완료" },
+];
 
 export default function JiraTicketsPage({ workItems }: { workItems: WorkItem[] }) {
   const [issues, setIssues] = useState<JiraIssue[]>([]);
@@ -63,11 +73,17 @@ export default function JiraTicketsPage({ workItems }: { workItems: WorkItem[] }
   }, [loadCache, refresh]);
 
   const linkByKey = useMemo(() => new Map(links.map((link) => [link.issueKey, link])), [links]);
+  const progressCounts = useMemo(() => {
+    const counts: Record<JiraProgressStage, number> = { todo: 0, in_progress: 0, done: 0 };
+    issues.forEach((issue) => { counts[jiraProgressStage(issue.statusCategory)] += 1; });
+    return counts;
+  }, [issues]);
   const filtered = useMemo(() => {
     const keyword = query.trim().toLocaleLowerCase();
     return issues.filter((issue) => {
-      if (filter === "active" && issue.statusCategory === "done") return false;
-      if (filter === "done" && issue.statusCategory !== "done") return false;
+      if (filter === "todo" || filter === "in_progress" || filter === "done") {
+        if (jiraProgressStage(issue.statusCategory) !== filter) return false;
+      }
       if (filter === "linked" && !linkByKey.has(issue.key)) return false;
       return !keyword || `${issue.key} ${issue.summary} ${issue.projectName} ${issue.status}`.toLocaleLowerCase().includes(keyword);
     });
@@ -98,18 +114,30 @@ export default function JiraTicketsPage({ workItems }: { workItems: WorkItem[] }
 
   return (
     <section className="jira-page">
-      <div className="jira-overview">
-        <div><span>내 담당 티켓{isSyncing ? " · 동기화 중" : ""}</span><strong>{issues.length}</strong></div>
-        <div><span>진행 중</span><strong>{issues.filter((issue) => issue.statusCategory !== "done").length}</strong></div>
-        <div><span>Task 연결</span><strong>{issues.filter((issue) => linkByKey.has(issue.key)).length}</strong></div>
+      <div className="jira-overview" aria-label="Jira 티켓 진행 현황">
+        {progressCards.map(({ stage, label }) => (
+          <button
+            className={`jira-overview-card ${stage} ${filter === stage ? "active" : ""}`}
+            type="button"
+            aria-pressed={filter === stage}
+            onClick={() => setFilter(stage)}
+            key={stage}
+          >
+            <span><i aria-hidden="true" />{label}</span>
+            <strong>{progressCounts[stage]}</strong>
+            <small>전체 {issues.length}개 중 {issues.length ? Math.round((progressCounts[stage] / issues.length) * 100) : 0}%</small>
+          </button>
+        ))}
       </div>
 
       <div className="jira-toolbar">
         <div className="jira-filters">
           <button className={filter === "all" ? "active" : ""} type="button" onClick={() => setFilter("all")}>전체</button>
-          <button className={filter === "active" ? "active" : ""} type="button" onClick={() => setFilter("active")}>진행 중</button>
+          <button className={filter === "todo" ? "active" : ""} type="button" onClick={() => setFilter("todo")}>해야 할 일</button>
+          <button className={filter === "in_progress" ? "active" : ""} type="button" onClick={() => setFilter("in_progress")}>진행 중</button>
           <button className={filter === "done" ? "active" : ""} type="button" onClick={() => setFilter("done")}>완료</button>
           <button className={filter === "linked" ? "active" : ""} type="button" onClick={() => setFilter("linked")}>Task 연결됨</button>
+          <span className="jira-sync-state">{isSyncing ? "Jira 동기화 중…" : `담당 티켓 ${issues.length}개`}</span>
         </div>
         <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="티켓, 프로젝트, 상태 검색" aria-label="Jira 티켓 검색" />
       </div>

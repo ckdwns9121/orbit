@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { createCalendarEvent, listCalendarEvents } from "../data/calendar-event-repository";
 import {
+  getGoogleCalendarConnection,
+  shouldAutoSyncGoogleCalendar,
+  syncGoogleCalendar,
+  type GoogleCalendarConnection,
+} from "../data/google-calendar-repository";
+import { getAppSettings } from "../data/settings-repository";
+import {
   addDays,
   isSameDay,
   startOfWeek,
@@ -35,6 +42,8 @@ export default function CalendarPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isComposerOpen, setIsComposerOpen] = useState(false);
+  const [googleConnection, setGoogleConnection] = useState<GoogleCalendarConnection | null>(null);
+  const [isSyncingGoogle, setIsSyncingGoogle] = useState(false);
 
   const days = useMemo(() => weekDays(weekStart), [weekStart]);
   const weekEnd = useMemo(() => addDays(weekStart, 7), [weekStart]);
@@ -55,6 +64,27 @@ export default function CalendarPage() {
     void refresh();
   }, [refresh]);
 
+  useEffect(() => {
+    void refreshGoogle(false);
+    // Calendar 주가 바뀔 때마다 연결 상태는 다시 확인하되, 15분 캐시가 API 재호출을 막습니다.
+  }, [weekStart]);
+
+  async function refreshGoogle(force: boolean) {
+    try {
+      const [connection, settings] = await Promise.all([getGoogleCalendarConnection(), getAppSettings()]);
+      setGoogleConnection(connection);
+      if (!connection || !settings.google_client_id || (!force && !shouldAutoSyncGoogleCalendar(connection))) return;
+      setIsSyncingGoogle(true);
+      const updated = await syncGoogleCalendar(settings.google_client_id);
+      setGoogleConnection(updated);
+      await refresh();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setIsSyncingGoogle(false);
+    }
+  }
+
   const weekLabel = `${monthDayFormatter.format(days[0])} – ${monthDayFormatter.format(days[6])}`;
 
   return (
@@ -68,7 +98,10 @@ export default function CalendarPage() {
           </div>
           <strong>{weekLabel}</strong>
         </div>
-        <button className="primary-button" type="button" onClick={() => setIsComposerOpen(true)}>+ 일정 추가</button>
+        <div className="calendar-toolbar-actions">
+          {googleConnection && <button type="button" disabled={isSyncingGoogle} onClick={() => void refreshGoogle(true)}>{isSyncingGoogle ? "동기화 중…" : "↻ Google 동기화"}</button>}
+          <button className="primary-button" type="button" onClick={() => setIsComposerOpen(true)}>+ 일정 추가</button>
+        </div>
       </div>
 
       {error && <div className="calendar-error">일정을 불러오지 못했습니다. <small>{error}</small></div>}
@@ -100,7 +133,7 @@ export default function CalendarPage() {
 
       <div className="calendar-legend">
         <span><i className="local" /> 로컬 일정</span>
-        <span className="future-source"><i /> Google Calendar 연결 예정</span>
+        <span className={googleConnection ? "" : "future-source"}><i className="google" /> {googleConnection ? `Google Calendar · ${googleConnection.email}` : "Settings에서 Google Calendar 연결"}</span>
       </div>
 
       {isComposerOpen && (

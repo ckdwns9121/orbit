@@ -6,6 +6,9 @@ export type SettingKey =
   | "jira_email"
   | "google_client_id"
   | "slack_workspace"
+  | "slack_workspace_id"
+  | "slack_user_name"
+  | "slack_user_id"
   | "openai_model";
 
 export type AppSettings = Partial<Record<SettingKey, string>>;

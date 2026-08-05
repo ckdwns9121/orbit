@@ -17,11 +17,14 @@ import {
   type WorkItemSessionProgress,
 } from "./data/ai-session-repository";
 import {
-  createWorkItemLink,
   deleteWorkItemLink,
   listWorkItemLinks,
 } from "./data/work-item-link-repository";
-import { syncJiraIssueDevelopment } from "./data/jira-development-repository";
+import {
+  getCachedJiraIssueDevelopment,
+  syncJiraIssueDevelopment,
+} from "./data/jira-development-repository";
+import { autoConnectTaskAiSessions } from "./data/context-discovery-repository";
 import {
   statusMeta,
   workItemStatuses,
@@ -29,6 +32,10 @@ import {
   type WorkItemStatus,
 } from "./domain/work-item";
 import { displaySessionTitle, projectName, type AiSession } from "./domain/ai-session";
+import {
+  shouldRefreshJiraDevelopment,
+  type JiraIssueDevelopment,
+} from "./domain/jira-development";
 import type { WorkItemLink } from "./domain/work-item-link";
 import { taskStatusForSessions } from "./domain/task-flow";
 import { requiresCheckpoint, type WorkItemTransition } from "./domain/workflow";
@@ -37,8 +44,11 @@ import SettingsPage from "./settings/SettingsPage";
 import WorkspacePage from "./workspace/WorkspacePage";
 import PullRequestsPage from "./pull-requests/PullRequestsPage";
 import JiraTicketsPage from "./jira/JiraTicketsPage";
+import TaskContextDiscoveryModal from "./context/TaskContextDiscoveryModal";
+import ChatPage from "./chat/ChatPage";
+import DashboardPage from "./dashboard/DashboardPage";
 
-type PrimarySection = "tasks" | "calendar" | "sessions" | "jira" | "pull_requests" | "settings";
+type PrimarySection = "dashboard" | "tasks" | "calendar" | "chat" | "sessions" | "jira" | "pull_requests" | "settings";
 type TaskTab = "today" | "todo" | "ai_running" | "done";
 
 const taskTabs: Array<{ id: TaskTab; label: string }> = [
@@ -60,8 +70,9 @@ function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isComposerOpen, setIsComposerOpen] = useState(false);
+  const [discoveryTask, setDiscoveryTask] = useState<{ id: string; title: string } | null>(null);
   const [pendingTransition, setPendingTransition] = useState<WorkItemTransition | null>(null);
-  const [activeSection, setActiveSection] = useState<PrimarySection>("tasks");
+  const [activeSection, setActiveSection] = useState<PrimarySection>("dashboard");
   const [activeTaskTab, setActiveTaskTab] = useState<TaskTab>("todo");
   const [contextItem, setContextItem] = useState<WorkItem | null>(null);
   const [deleteItem, setDeleteItem] = useState<WorkItem | null>(null);
@@ -142,6 +153,16 @@ function App() {
         </div>
 
         <nav aria-label="주요 메뉴">
+          <button className={`nav-item ${activeSection === "dashboard" ? "active" : ""}`} type="button" onClick={() => setActiveSection("dashboard")}><span className="nav-symbol">◫</span>Dashboard<b /></button>
+          <button
+            className={`nav-item ${activeSection === "chat" ? "active" : ""}`}
+            type="button"
+            onClick={() => setActiveSection("chat")}
+          >
+            <span className="nav-symbol">✦</span>
+            Chat
+            <b />
+          </button>
           <button
             className={`nav-item ${activeSection === "tasks" ? "active" : ""}`}
             type="button"
@@ -210,7 +231,7 @@ function App() {
       <main className="workspace">
         <header className="topbar">
           <div>
-            <h1>{activeSection === "tasks" ? "Task" : activeSection === "calendar" ? "Calendar" : activeSection === "sessions" ? "Workspace" : activeSection === "jira" ? "Jira Tickets" : activeSection === "pull_requests" ? "Pull Requests" : "Settings"}</h1>
+            <h1>{activeSection === "dashboard" ? "Dashboard" : activeSection === "tasks" ? "Task" : activeSection === "calendar" ? "Calendar" : activeSection === "chat" ? "Chat" : activeSection === "sessions" ? "Workspace" : activeSection === "jira" ? "Jira Tickets" : activeSection === "pull_requests" ? "Pull Requests" : "Settings"}</h1>
             <span>{formatToday()}</span>
           </div>
           {activeSection === "tasks" && (
@@ -236,8 +257,12 @@ function App() {
           </nav>
         )}
 
-        {activeSection === "calendar" ? (
+        {activeSection === "dashboard" ? (
+          <DashboardPage />
+        ) : activeSection === "calendar" ? (
           <CalendarPage />
+        ) : activeSection === "chat" ? (
+          <ChatPage />
         ) : activeSection === "sessions" ? (
           <WorkspacePage
             workItems={items}
@@ -369,8 +394,19 @@ function App() {
       {isComposerOpen && (
         <TaskComposer
           onClose={() => setIsComposerOpen(false)}
-          onCreated={async () => {
+          onCreated={async (task) => {
             setIsComposerOpen(false);
+            setDiscoveryTask(task);
+            await refresh();
+          }}
+        />
+      )}
+      {discoveryTask && (
+        <TaskContextDiscoveryModal
+          task={discoveryTask}
+          onClose={() => setDiscoveryTask(null)}
+          onConnected={async () => {
+            setDiscoveryTask(null);
             await refresh();
           }}
         />
@@ -661,7 +697,7 @@ function TaskComposer({
   onCreated,
 }: {
   onClose: () => void;
-  onCreated: () => Promise<void>;
+  onCreated: (task: { id: string; title: string }) => Promise<void>;
 }) {
   const [title, setTitle] = useState("");
   const [isSaving, setIsSaving] = useState(false);
@@ -673,8 +709,9 @@ function TaskComposer({
     setIsSaving(true);
     setSaveError(null);
     try {
-      await createWorkItem({ title, status: "todo" });
-      await onCreated();
+      const normalizedTitle = title.trim();
+      const id = await createWorkItem({ title: normalizedTitle, status: "todo" });
+      await onCreated({ id, title: normalizedTitle });
     } catch (cause) {
       setSaveError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -690,7 +727,7 @@ function TaskComposer({
           <button type="button" onClick={onClose} aria-label="닫기">×</button>
         </div>
         <label>작업 제목<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="예: GitHub OAuth callback 구현" autoFocus /></label>
-        <p className="composer-flow-note">Task를 만든 다음 AI 세션과 Jira·GitHub 업무를 연결하세요.</p>
+        <p className="composer-flow-note">Task를 만들면 AI가 관련 Jira 티켓과 작업 세션을 찾아 연결을 제안합니다.</p>
         {saveError && <div className="composer-error" role="alert">저장하지 못했습니다. <small>{saveError}</small></div>}
         <div className="composer-actions">
           <button type="button" onClick={onClose}>취소</button>
@@ -704,12 +741,11 @@ function TaskComposer({
 function TaskContextModal({ item, onClose, onChanged }: { item: WorkItem; onClose: () => void; onChanged: () => Promise<void> }) {
   const [sessions, setSessions] = useState<AiSession[]>([]);
   const [links, setLinks] = useState<WorkItemLink[]>([]);
-  const [githubReference, setGithubReference] = useState("");
-  const [commitReference, setCommitReference] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [isSessionPickerOpen, setIsSessionPickerOpen] = useState(false);
-  const [sessionQuery, setSessionQuery] = useState("");
   const [isJiraSyncing, setIsJiraSyncing] = useState(false);
+  const [development, setDevelopment] = useState<JiraIssueDevelopment[]>([]);
+  const [isAutoConnecting, setIsAutoConnecting] = useState(false);
+  const [autoConnectMessage, setAutoConnectMessage] = useState<string | null>(null);
   const syncedJiraLinksRef = useRef(new Set<string>());
 
   const refreshContext = useCallback(async () => {
@@ -723,6 +759,7 @@ function TaskContextModal({ item, onClose, onChanged }: { item: WorkItem; onClos
 
   useEffect(() => {
     let cancelled = false;
+    setDevelopment([]);
     void refreshContext().then(async () => {
       const [nextSessions, nextLinks] = await Promise.all([listAiSessions(), listWorkItemLinks(item.id)]);
       const cwds = nextSessions
@@ -730,14 +767,31 @@ function TaskContextModal({ item, onClose, onChanged }: { item: WorkItem; onClos
         .map((session) => session.cwd as string);
       const jiraLinks = nextLinks.filter((link) => link.kind === "jira" && link.externalId);
       if (jiraLinks.length === 0 || cancelled) return;
+      const cached = await Promise.all(jiraLinks.map((link) =>
+        getCachedJiraIssueDevelopment(link.externalId!)));
+      if (cancelled) return;
+      setDevelopment(cached.flatMap((entry) => entry ? [entry.development] : []));
+      const linksToRefresh = jiraLinks.filter((_, index) => shouldRefreshJiraDevelopment(cached[index]));
+      if (linksToRefresh.length === 0) return;
+
       setIsJiraSyncing(true);
       try {
-        for (const link of jiraLinks) {
+        const byIssueKey = new Map(cached.flatMap((entry) => entry
+          ? [[entry.development.issue.key, entry.development] as const]
+          : []));
+        for (const link of linksToRefresh) {
           if (cancelled || syncedJiraLinksRef.current.has(link.id)) continue;
           syncedJiraLinksRef.current.add(link.id);
-          await syncJiraIssueDevelopment(item.id, link.id, link.externalId!, cwds);
+          const fresh = await syncJiraIssueDevelopment(item.id, link.id, link.externalId!, cwds);
+          byIssueKey.set(fresh.issue.key, fresh);
         }
-        if (!cancelled) setLinks(await listWorkItemLinks(item.id));
+        if (!cancelled) {
+          setDevelopment(jiraLinks.flatMap((link) => {
+            const value = byIssueKey.get(link.externalId!);
+            return value ? [value] : [];
+          }));
+          setLinks(await listWorkItemLinks(item.id));
+        }
       } catch (cause) {
         if (!cancelled) setError(cause instanceof Error ? cause.message : String(cause));
       } finally {
@@ -750,25 +804,6 @@ function TaskContextModal({ item, onClose, onChanged }: { item: WorkItem; onClos
   }, [item.id, refreshContext]);
 
   const linkedSessions = sessions.filter((session) => session.linkedWorkItemId === item.id);
-  const availableSessions = sessions.filter((session) => !session.linkedWorkItemId);
-  const visibleAvailableSessions = availableSessions.filter((session) => {
-    const keyword = sessionQuery.trim().toLocaleLowerCase();
-    return !keyword || [displaySessionTitle(session), projectName(session.cwd), session.provider]
-      .some((value) => value.toLocaleLowerCase().includes(keyword));
-  }).slice(0, 40);
-
-  async function connectSession(value: string) {
-    const session = sessions.find((candidate) => `${candidate.provider}:${candidate.sessionId}` === value);
-    if (!session) return;
-    await linkAiSession(session.provider, session.sessionId, item.id);
-    if (item.status === "todo" || item.status === "done") {
-      await moveWorkItem(item.id, "ai_running");
-    }
-    setIsSessionPickerOpen(false);
-    setSessionQuery("");
-    await refreshContext();
-    await onChanged();
-  }
 
   async function disconnectSession(session: AiSession) {
     await linkAiSession(session.provider, session.sessionId, null);
@@ -793,28 +828,59 @@ function TaskContextModal({ item, onClose, onChanged }: { item: WorkItem; onClos
     await onChanged();
   }
 
-  async function addExternalLink(kind: "github_pr" | "github_commit", reference: string) {
+  async function autoConnectSessions() {
+    setIsAutoConnecting(true);
+    setAutoConnectMessage(null);
     try {
       setError(null);
-      await createWorkItemLink(item.id, kind, reference);
-      if (kind === "github_pr") setGithubReference("");
-      else setCommitReference("");
+      const result = await autoConnectTaskAiSessions(item.id, item.title);
+      setAutoConnectMessage(result.connected.length > 0
+        ? `${result.connected.length}개의 관련 세션을 자동으로 연결했습니다.`
+        : "관련도가 충분히 높은 AI 세션을 찾지 못했습니다.");
       await refreshContext();
+      await onChanged();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setIsAutoConnecting(false);
     }
   }
 
+  const jiraLinks = links.filter((link) => link.kind === "jira");
+
   return (
-    <div className="modal-backdrop" onMouseDown={onClose}>
-      <section className="task-context-modal" onMouseDown={(event) => event.stopPropagation()}>
+    <div className="modal-backdrop task-context-backdrop" onMouseDown={onClose}>
+      <section className="task-context-modal task-context-drawer" onMouseDown={(event) => event.stopPropagation()}>
         <header>
-          <div><span>Task · SSOT</span><h2>{item.title}</h2><p>연결된 AI 세션이 모두 완료되면 Task도 자동으로 완료됩니다.</p></div>
+          <div><span>Task · Context</span><h2>{item.title}</h2><p>Jira와 GitHub 개발 흐름, AI 작업 세션을 한곳에서 확인합니다.</p></div>
           <button type="button" onClick={onClose} aria-label="닫기">×</button>
         </header>
 
+        <DevelopmentSection development={development} isLoading={isJiraSyncing} />
+
         <div className="context-section">
+          <div className="context-section-title"><strong>Jira</strong><span>{isJiraSyncing ? "개발 정보 동기화 중…" : `${jiraLinks.length}개 연결됨`}</span></div>
+          {jiraLinks.map((link) => (
+            <div className="context-link-row external" key={link.id}>
+              <i className="jira">J</i>
+              <div><strong>{link.label}</strong><span>Jira 이슈{link.status !== "linked" ? ` · ${link.status}` : ""}</span></div>
+              <div className="context-row-actions">
+                {link.externalUrl && <button type="button" onClick={() => void openUrl(link.externalUrl!)}>열기</button>}
+                <button type="button" onClick={async () => { await deleteWorkItemLink(link.id); await refreshContext(); }}>해제</button>
+              </div>
+            </div>
+          ))}
+          {jiraLinks.length === 0 && <div className="context-empty-row">연결된 Jira 티켓이 없습니다.</div>}
+        </div>
+
+        <div className="context-section ai-auto-section">
           <div className="context-section-title"><strong>AI 작업 세션</strong><span>{linkedSessions.length}개 연결됨</span></div>
+          <button className="ai-auto-connect" type="button" onClick={() => void autoConnectSessions()} disabled={isAutoConnecting}>
+            <i>✦</i>
+            <span><strong>{isAutoConnecting ? "AI가 관련 세션을 찾는 중…" : "AI로 세션 자동 연결"}</strong><small>Task 제목과 최근 대화를 분석해 관련도가 높은 세션만 연결합니다.</small></span>
+            <b>{isAutoConnecting ? "분석 중" : "자동 연결"}</b>
+          </button>
+          {autoConnectMessage && <p className="ai-auto-message">{autoConnectMessage}</p>}
           {linkedSessions.map((session) => (
             <div className="context-link-row" key={`${session.provider}:${session.sessionId}`}>
               <i className={session.provider}>{session.provider === "claude" ? "C" : "O"}</i>
@@ -825,76 +891,126 @@ function TaskContextModal({ item, onClose, onChanged }: { item: WorkItem; onClos
               </div>
             </div>
           ))}
-          <div className="context-session-picker">
-            <button
-              className="context-session-trigger"
-              type="button"
-              aria-expanded={isSessionPickerOpen}
-              onClick={() => setIsSessionPickerOpen((current) => !current)}
-              disabled={availableSessions.length === 0}
-            >
-              <span><b>＋</b>{availableSessions.length > 0 ? "AI 세션 연결" : "연결 가능한 세션 없음"}</span>
-              {availableSessions.length > 0 && <small>{availableSessions.length}개</small>}
-            </button>
-            {isSessionPickerOpen && (
-              <div className="context-session-popover">
-                <input
-                  value={sessionQuery}
-                  onChange={(event) => setSessionQuery(event.target.value)}
-                  placeholder="세션 이름 또는 프로젝트 검색"
-                  aria-label="연결할 AI 세션 검색"
-                  autoFocus
-                />
-                <div className="context-session-options">
-                  {visibleAvailableSessions.length > 0 ? visibleAvailableSessions.map((session) => (
-                    <button
-                      type="button"
-                      key={`${session.provider}:${session.sessionId}`}
-                      onClick={() => void connectSession(`${session.provider}:${session.sessionId}`)}
-                    >
-                      <i className={session.provider}>{session.provider === "claude" ? "C" : "O"}</i>
-                      <span>
-                        <strong>{displaySessionTitle(session)}</strong>
-                        <small>{projectName(session.cwd)} · {session.provider}</small>
-                      </span>
-                      <b>연결</b>
-                    </button>
-                  )) : (
-                    <div className="context-session-no-result">검색 결과가 없습니다.</div>
-                  )}
-                </div>
-                {availableSessions.length > 40 && !sessionQuery && <p>최근 세션 40개를 표시합니다. 다른 세션은 검색해주세요.</p>}
-              </div>
-            )}
-          </div>
         </div>
-
-        <div className="context-section">
-          <div className="context-section-title"><strong>외부 업무 연결</strong><span>{isJiraSyncing ? "Jira 개발 정보 동기화 중…" : "Task 상태의 원천은 Orbit입니다"}</span></div>
-          {links.map((link) => (
-            <div className="context-link-row external" key={link.id}>
-              <i className={link.kind}>{link.kind === "jira" ? "J" : link.kind === "github_pr" ? "PR" : "⌁"}</i>
-              <div><strong>{link.label}</strong><span>{link.kind === "jira" ? `Jira 이슈${link.status !== "linked" ? ` · ${link.status}` : ""}` : link.kind === "github_pr" ? `GitHub Pull Request${link.status !== "linked" ? ` · ${link.status}` : ""}` : "GitHub Commit"}</span></div>
-              <div className="context-row-actions">
-                {link.externalUrl && <button type="button" onClick={() => void openUrl(link.externalUrl!)}>열기</button>}
-                <button type="button" onClick={async () => { await deleteWorkItemLink(link.id); await refreshContext(); }}>해제</button>
-              </div>
-            </div>
-          ))}
-          <p className="context-jira-hint">Jira 티켓은 왼쪽의 <strong>Jira Tickets</strong> 탭에서 내 담당 티켓을 골라 연결하세요.</p>
-          <form className="external-link-form" onSubmit={(event) => { event.preventDefault(); void addExternalLink("github_pr", githubReference); }}>
-            <label>GitHub PR<input value={githubReference} onChange={(event) => setGithubReference(event.target.value)} placeholder="https://github.com/org/repo/pull/123" /></label>
-            <button type="submit" disabled={!githubReference.trim()}>연결</button>
-          </form>
-          <form className="external-link-form" onSubmit={(event) => { event.preventDefault(); void addExternalLink("github_commit", commitReference); }}>
-            <label>GitHub Commit<input value={commitReference} onChange={(event) => setCommitReference(event.target.value)} placeholder="https://github.com/org/repo/commit/abcdef" /></label>
-            <button type="submit" disabled={!commitReference.trim()}>연결</button>
-          </form>
-          {error && <div className="context-error">{error}</div>}
-        </div>
+        {error && <div className="context-error">{error}</div>}
       </section>
     </div>
   );
+}
+
+function DevelopmentSection({ development, isLoading }: {
+  development: JiraIssueDevelopment[];
+  isLoading: boolean;
+}) {
+  const branches = development.flatMap((item) => item.branches);
+  const commits = development.flatMap((item) => item.commits);
+  const pullRequests = development.flatMap((item) => item.pullRequests);
+  const builds = development.flatMap((item) => item.builds);
+  const warnings = [...new Set(development.flatMap((item) => item.warnings))];
+  const tickets = development.map((item) => `${item.issue.key} · ${item.issue.summary}`).join(", ");
+
+  return (
+    <div className="context-section development-section">
+      <div className="context-section-title">
+        <strong>Development</strong>
+        <span>{isLoading ? "GitHub 개발 정보 찾는 중…" : tickets}</span>
+      </div>
+      <div className="development-summary" aria-label="GitHub 개발 정보 요약">
+        <DevelopmentMetric symbol="⑂" label="브랜치" count={branches.length} />
+        <DevelopmentMetric symbol="⌁" label="커밋" count={commits.length} />
+        <DevelopmentMetric symbol="PR" label="Pull request" count={pullRequests.length} />
+        <DevelopmentMetric symbol="✓" label="빌드" count={builds.length} tone={builds.some((build) => build.conclusion === "failure") ? "danger" : "success"} />
+      </div>
+      {!isLoading && branches.length + commits.length + pullRequests.length + builds.length === 0 && (
+        <div className="development-empty">Jira 티켓 키가 포함된 GitHub 개발 정보를 찾지 못했습니다.</div>
+      )}
+      <DevelopmentDetails
+        label="브랜치"
+        items={branches.map((branch) => ({
+          id: `${branch.repository}:${branch.name}`,
+          title: branch.name,
+          meta: branch.repository,
+          url: branch.url,
+        }))}
+      />
+      <DevelopmentDetails
+        label="커밋"
+        items={commits.map((commit) => ({
+          id: `${commit.repository}:${commit.sha}`,
+          title: `${commit.sha.slice(0, 7)} · ${commit.message}`,
+          meta: `${commit.repository}${commit.authorName ? ` · ${commit.authorName}` : ""}`,
+          url: commit.url,
+        }))}
+      />
+      <DevelopmentDetails
+        label="Pull requests"
+        items={pullRequests.map((pullRequest) => ({
+          id: `${pullRequest.repository}:${pullRequest.number}`,
+          title: `#${pullRequest.number} · ${pullRequest.title}`,
+          meta: `${pullRequest.repository} · ${formatDevelopmentStatus(pullRequest.status)}`,
+          url: pullRequest.url,
+        }))}
+      />
+      <DevelopmentDetails
+        label="빌드"
+        items={builds.map((build) => ({
+          id: `${build.repository}:${build.id}`,
+          title: build.name,
+          meta: `${build.repository} · ${build.branch} · ${formatDevelopmentStatus(build.conclusion || build.status)}`,
+          url: build.url,
+        }))}
+      />
+      {warnings.length > 0 && <p className="development-warning">{warnings.join(" ")}</p>}
+    </div>
+  );
+}
+
+function DevelopmentMetric({ symbol, label, count, tone = "" }: {
+  symbol: string;
+  label: string;
+  count: number;
+  tone?: "" | "success" | "danger";
+}) {
+  return (
+    <div className={tone}>
+      <i>{symbol}</i>
+      <span><strong>{count}</strong>{label}</span>
+    </div>
+  );
+}
+
+function DevelopmentDetails({ label, items }: {
+  label: string;
+  items: Array<{ id: string; title: string; meta: string; url: string }>;
+}) {
+  if (items.length === 0) return null;
+  return (
+    <details className="development-details">
+      <summary>{label}<span>{items.length}</span></summary>
+      <div>
+        {items.map((item) => (
+          <button type="button" onClick={() => void openUrl(item.url)} key={item.id}>
+            <span><strong>{item.title}</strong><small>{item.meta}</small></span>
+            <b>열기</b>
+          </button>
+        ))}
+      </div>
+    </details>
+  );
+}
+
+function formatDevelopmentStatus(value: string) {
+  const labels: Record<string, string> = {
+    open: "열림",
+    closed: "닫힘",
+    merged: "병합됨",
+    completed: "완료",
+    success: "성공",
+    failure: "실패",
+    in_progress: "진행 중",
+    queued: "대기 중",
+  };
+  return labels[value.toLocaleLowerCase()] || value;
 }
 
 function TransitionCheckpoint({
