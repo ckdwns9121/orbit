@@ -422,11 +422,11 @@ function SessionDetailModal({
           <div className="session-modal-section-title"><strong>추적 중인 외부 업무</strong><span>{links.length}개</span></div>
           {links.length ? links.map((link) => (
             <div className="session-tracked-link" key={link.id}>
-              <i className={link.kind}>{link.kind === "jira" ? "J" : link.kind === "github_pr" ? "PR" : "⌁"}</i>
+              <i className={link.kind}>{link.kind === "jira" ? "J" : link.kind === "github_pr" ? "PR" : link.kind === "slack" ? "S" : "⌁"}</i>
               <div><strong>{link.label}</strong><span>{linkKindLabel(link.kind)}</span></div>
               <em>{link.status === "linked" ? "연결됨" : link.status}</em>
             </div>
-          )) : <div className="session-modal-empty">Task에 연결된 Jira, GitHub PR 또는 커밋이 없습니다.</div>}
+          )) : <div className="session-modal-empty">Task에 연결된 Jira, GitHub 또는 Slack 컨텍스트가 없습니다.</div>}
         </div>
 
         {error && <div className="session-modal-error">{error}</div>}
@@ -438,6 +438,7 @@ function SessionDetailModal({
 function linkKindLabel(kind: WorkItemLink["kind"]) {
   if (kind === "jira") return "Jira 이슈";
   if (kind === "github_pr") return "GitHub Pull Request";
+  if (kind === "slack") return "Slack 메시지";
   return "GitHub Commit";
 }
 

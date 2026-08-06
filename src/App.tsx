@@ -1,12 +1,41 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type FormEvent } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import {
+  AlarmClock,
+  Calendar,
+  Check,
+  CheckSquare,
+  ChevronDown,
+  CircleCheck,
+  GitBranch,
+  GitCommitHorizontal,
+  GitPullRequest,
+  GripVertical,
+  LayoutDashboard,
+  LayoutGrid,
+  Link2,
+  MessageCircle,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Pencil,
+  Plug,
+  Plus,
+  Settings,
+  Sparkles,
+  Ticket,
+  Trash2,
+  X,
+  type LucideIcon,
+} from "lucide-react";
 import "./App.scss";
 import {
   createWorkItem,
   deleteWorkItem,
   listWorkItems,
   moveWorkItem,
+  reorderWorkItems,
   updateCheckpoint,
+  updateWorkItemTargetAt,
   updateWorkItemTitle,
 } from "./data/work-item-repository";
 import {
@@ -38,6 +67,7 @@ import {
 } from "./domain/jira-development";
 import type { WorkItemLink } from "./domain/work-item-link";
 import { taskStatusForSessions } from "./domain/task-flow";
+import { isTaskSortMode, reorderWorkItemIds, sortWorkItems, type TaskSortMode } from "./domain/work-item-sort";
 import { requiresCheckpoint, type WorkItemTransition } from "./domain/workflow";
 import CalendarPage from "./calendar/CalendarPage";
 import SettingsPage from "./settings/SettingsPage";
@@ -47,6 +77,13 @@ import JiraTicketsPage from "./jira/JiraTicketsPage";
 import TaskContextDiscoveryModal from "./context/TaskContextDiscoveryModal";
 import ChatPage from "./chat/ChatPage";
 import DashboardPage from "./dashboard/DashboardPage";
+import ServiceIcon, { serviceIconForProvider } from "./components/ServiceIcon";
+import QuickPanel from "./quick-panel/QuickPanel";
+import { getAppSettings } from "./data/settings-repository";
+import { DEFAULT_QUICK_PANEL_SHORTCUT, displayShortcut, matchesShortcutEvent, shortcutSettingsFromStored } from "./domain/shortcuts";
+import { getRegisteredShortcuts, setShortcutActions, syncGlobalShortcuts } from "./shortcuts/global-shortcuts";
+import { requestTaskReminderPermission } from "./notifications/task-reminders";
+import TaskAiFix from "./tasks/TaskAiFix";
 
 type PrimarySection = "dashboard" | "tasks" | "calendar" | "chat" | "sessions" | "jira" | "pull_requests" | "settings";
 type TaskTab = "today" | "todo" | "ai_running" | "done";
@@ -57,6 +94,9 @@ const taskTabs: Array<{ id: TaskTab; label: string }> = [
   { id: "done", label: "완료" },
 ];
 
+const TASK_SORT_STORAGE_KEY = "orbit.task-sort";
+const SIDEBAR_COLLAPSED_STORAGE_KEY = "orbit.sidebar-collapsed";
+
 function formatToday() {
   return new Intl.DateTimeFormat("ko-KR", {
     month: "long",
@@ -65,18 +105,57 @@ function formatToday() {
   }).format(new Date());
 }
 
+function formatWorkItemCreatedAt(value: string) {
+  return new Intl.DateTimeFormat("ko-KR", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(new Date(value));
+}
+
+function toDateTimeLocalValue(value: string | null) {
+  if (!value) return "";
+  const date = new Date(value);
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 16);
+}
+
+function formatWorkItemTargetAt(value: string) {
+  const target = new Date(value);
+  const label = new Intl.DateTimeFormat("ko-KR", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(target);
+  return `${target.getTime() <= Date.now() ? "목표 지남" : "목표"} ${label}`;
+}
+
 function App() {
   const [items, setItems] = useState<WorkItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isComposerOpen, setIsComposerOpen] = useState(false);
-  const [discoveryTask, setDiscoveryTask] = useState<{ id: string; title: string } | null>(null);
+  const [discoveryTask, setDiscoveryTask] = useState<{ id: string; title: string; description: string } | null>(null);
   const [pendingTransition, setPendingTransition] = useState<WorkItemTransition | null>(null);
   const [activeSection, setActiveSection] = useState<PrimarySection>("dashboard");
   const [activeTaskTab, setActiveTaskTab] = useState<TaskTab>("todo");
   const [contextItem, setContextItem] = useState<WorkItem | null>(null);
   const [deleteItem, setDeleteItem] = useState<WorkItem | null>(null);
   const [sessionProgress, setSessionProgress] = useState<Record<string, WorkItemSessionProgress>>({});
+  const [isQuickPanelOpen, setIsQuickPanelOpen] = useState(false);
+  const [shortcutError, setShortcutError] = useState<string | null>(null);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(
+    () => window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === "true",
+  );
+  const [taskSortMode, setTaskSortMode] = useState<TaskSortMode>(() => {
+    const stored = window.localStorage.getItem(TASK_SORT_STORAGE_KEY);
+    return isTaskSortMode(stored) ? stored : "manual";
+  });
 
   const refresh = useCallback(async () => {
     try {
@@ -98,6 +177,33 @@ function App() {
     void refresh();
   }, [refresh]);
 
+  useEffect(() => {
+    setShortcutActions({
+      openQuickPanel: () => setIsQuickPanelOpen(true),
+      openChat: () => { setIsQuickPanelOpen(false); setActiveSection("chat"); },
+    });
+    void getAppSettings()
+      .then((stored) => syncGlobalShortcuts(shortcutSettingsFromStored(stored)))
+      .catch((cause) => setShortcutError(cause instanceof Error ? cause.message : String(cause)));
+  }, []);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const shortcuts = getRegisteredShortcuts();
+      if (!shortcuts) return;
+      if (matchesShortcutEvent(event, shortcuts.quickPanel)) {
+        event.preventDefault();
+        setIsQuickPanelOpen(true);
+      } else if (matchesShortcutEvent(event, shortcuts.chat)) {
+        event.preventDefault();
+        setIsQuickPanelOpen(false);
+        setActiveSection("chat");
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
   const groupedItems = useMemo(() => {
     return Object.fromEntries(
       workItemStatuses.map((status) => [
@@ -109,6 +215,7 @@ function App() {
 
   const focusItem = groupedItems.focus[0];
   const nextItems = [...groupedItems.review, ...groupedItems.todo].slice(0, 5);
+  const quickPanelItems = items.filter((item) => item.status !== "done" && item.status !== "inbox").slice(0, 12);
 
   async function commitMove(id: string, status: WorkItemStatus) {
     try {
@@ -138,8 +245,34 @@ function App() {
     await refresh();
   }
 
+  function handleTaskSortMode(mode: TaskSortMode) {
+    setTaskSortMode(mode);
+    window.localStorage.setItem(TASK_SORT_STORAGE_KEY, mode);
+  }
+
+  async function handleTaskReorder(status: WorkItemStatus, orderedIds: string[]) {
+    setItems((current) => current.map((item) => {
+      const position = item.status === status ? orderedIds.indexOf(item.id) : -1;
+      return position >= 0 ? { ...item, position } : item;
+    }));
+    try {
+      await reorderWorkItems(status, orderedIds);
+      await refresh();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+      await refresh();
+    }
+  }
+
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${isSidebarCollapsed ? "sidebar-collapsed" : ""}`}>
+      {shortcutError && (
+        <div className="global-shortcut-error" role="alert">
+          <div><strong>전역 단축키를 사용할 수 없습니다.</strong><span>{shortcutError}</span></div>
+          <button type="button" onClick={() => { setShortcutError(null); setActiveSection("settings"); }}>Settings 열기</button>
+          <button type="button" aria-label="알림 닫기" onClick={() => setShortcutError(null)}><X size={14} /></button>
+        </div>
+      )}
       <aside className="sidebar">
         <div className="traffic-lights" aria-hidden="true">
           <span />
@@ -148,77 +281,99 @@ function App() {
         </div>
 
         <div className="brand">
-          <strong>Orbit</strong>
-          <span>{formatToday()}</span>
+          <div><strong>Orbit</strong><span>{formatToday()}</span></div>
+          <button
+            className="sidebar-toggle"
+            type="button"
+            title={isSidebarCollapsed ? "사이드바 펼치기" : "사이드바 접기"}
+            aria-label={isSidebarCollapsed ? "사이드바 펼치기" : "사이드바 접기"}
+            onClick={() => setIsSidebarCollapsed((current) => {
+              window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, String(!current));
+              return !current;
+            })}
+          >
+            {isSidebarCollapsed ? <PanelLeftOpen size={17} strokeWidth={1.7} /> : <PanelLeftClose size={17} strokeWidth={1.7} />}
+          </button>
         </div>
 
         <nav aria-label="주요 메뉴">
-          <button className={`nav-item ${activeSection === "dashboard" ? "active" : ""}`} type="button" onClick={() => setActiveSection("dashboard")}><span className="nav-symbol">◫</span>Dashboard<b /></button>
-          <button
-            className={`nav-item ${activeSection === "chat" ? "active" : ""}`}
-            type="button"
-            onClick={() => setActiveSection("chat")}
-          >
-            <span className="nav-symbol">✦</span>
-            Chat
+          <button className={`nav-item ${activeSection === "dashboard" ? "active" : ""}`} type="button" title="Dashboard" onClick={() => setActiveSection("dashboard")}>
+            <span className="nav-symbol"><LayoutDashboard size={16} strokeWidth={1.75} aria-hidden="true" /></span>
+            Dashboard
             <b />
           </button>
           <button
             className={`nav-item ${activeSection === "tasks" ? "active" : ""}`}
             type="button"
+            title="Task"
             onClick={() => setActiveSection("tasks")}
           >
-            <span className="nav-symbol">✓</span>
+            <span className="nav-symbol"><CheckSquare size={16} strokeWidth={1.75} aria-hidden="true" /></span>
             Task
             <b>{items.filter((item) => item.status !== "done").length || ""}</b>
           </button>
           <button
+            className={`nav-item ${activeSection === "jira" ? "active" : ""}`}
+            type="button"
+            title="Jira Tickets"
+            onClick={() => setActiveSection("jira")}
+          >
+            <span className="nav-symbol"><Ticket size={16} strokeWidth={1.75} aria-hidden="true" /></span>
+            Jira Tickets
+            <b />
+          </button>
+          <button
+            className={`nav-item ${activeSection === "chat" ? "active" : ""}`}
+            type="button"
+            title="Chat"
+            onClick={() => setActiveSection("chat")}
+          >
+            <span className="nav-symbol"><MessageCircle size={16} strokeWidth={1.75} aria-hidden="true" /></span>
+            Chat
+            <b />
+          </button>
+          <button
             className={`nav-item ${activeSection === "calendar" ? "active" : ""}`}
             type="button"
+            title="Calendar"
             onClick={() => setActiveSection("calendar")}
           >
-            <span className="nav-symbol">▦</span>
+            <span className="nav-symbol"><Calendar size={16} strokeWidth={1.75} aria-hidden="true" /></span>
             Calendar
             <b />
           </button>
           <button
             className={`nav-item ${activeSection === "sessions" ? "active" : ""}`}
             type="button"
+            title="Workspace"
             onClick={() => setActiveSection("sessions")}
           >
-            <span className="nav-symbol">⌘</span>
+            <span className="nav-symbol"><LayoutGrid size={16} strokeWidth={1.75} aria-hidden="true" /></span>
             Workspace
-            <b />
-          </button>
-          <button
-            className={`nav-item ${activeSection === "jira" ? "active" : ""}`}
-            type="button"
-            onClick={() => setActiveSection("jira")}
-          >
-            <span className="nav-symbol">J</span>
-            Jira Tickets
             <b />
           </button>
           <button
             className={`nav-item ${activeSection === "pull_requests" ? "active" : ""}`}
             type="button"
+            title="Pull Requests"
             onClick={() => setActiveSection("pull_requests")}
           >
-            <span className="nav-symbol"><GitHubNavIcon /></span>
+            <span className="nav-symbol"><GitPullRequest size={16} strokeWidth={1.75} aria-hidden="true" /></span>
             Pull Requests
             <b />
           </button>
 
           <div className="nav-separator" />
-          <button className="nav-item nav-item-muted" type="button" disabled>
-            <span className="nav-symbol">↔</span> Integrations <b />
+          <button className="nav-item nav-item-muted" type="button" title="Integrations" disabled>
+            <span className="nav-symbol"><Plug size={16} strokeWidth={1.75} aria-hidden="true" /></span> Integrations <b />
           </button>
           <button
             className={`nav-item ${activeSection === "settings" ? "active" : ""}`}
             type="button"
+            title="Settings"
             onClick={() => setActiveSection("settings")}
           >
-            <span className="nav-symbol">⚙</span> Settings <b />
+            <span className="nav-symbol"><Settings size={16} strokeWidth={1.75} aria-hidden="true" /></span> Settings <b />
           </button>
         </nav>
 
@@ -235,8 +390,8 @@ function App() {
             <span>{formatToday()}</span>
           </div>
           {activeSection === "tasks" && (
-            <button className="primary-button" type="button" onClick={() => setIsComposerOpen(true)}>
-              + 작업 추가
+            <button className="primary-button primary-button-icon" type="button" onClick={() => setIsComposerOpen(true)}>
+              <Plus size={14} strokeWidth={2} aria-hidden="true" /> 작업 추가
             </button>
           )}
         </header>
@@ -385,6 +540,9 @@ function App() {
             onDelete={setDeleteItem}
             sessionProgress={sessionProgress}
             onAdd={() => setIsComposerOpen(true)}
+            sortMode={taskSortMode}
+            onSortModeChange={handleTaskSortMode}
+            onReorder={handleTaskReorder}
           />
         )}
           </>
@@ -396,7 +554,7 @@ function App() {
           onClose={() => setIsComposerOpen(false)}
           onCreated={async (task) => {
             setIsComposerOpen(false);
-            setDiscoveryTask(task);
+            if (task.collectAiContext) setDiscoveryTask(task);
             await refresh();
           }}
         />
@@ -447,6 +605,27 @@ function App() {
           }}
         />
       )}
+      {isQuickPanelOpen && (
+        <QuickPanel
+          items={quickPanelItems}
+          shortcutLabel={displayShortcut(getRegisteredShortcuts()?.quickPanel ?? DEFAULT_QUICK_PANEL_SHORTCUT)}
+          onClose={() => setIsQuickPanelOpen(false)}
+          onOpenTask={(item) => {
+            setIsQuickPanelOpen(false);
+            setActiveSection("tasks");
+            setActiveTaskTab(item.status === "done" ? "done" : item.status === "todo" ? "todo" : "ai_running");
+            setContextItem(item);
+          }}
+          onStartFocus={async (item) => {
+            setIsQuickPanelOpen(false);
+            setActiveSection("tasks");
+            await handleMove(item.id, "focus");
+          }}
+          onCreateTask={() => { setIsQuickPanelOpen(false); setActiveSection("tasks"); setIsComposerOpen(true); }}
+          onOpenChat={() => { setIsQuickPanelOpen(false); setActiveSection("chat"); }}
+        />
+      )}
+      {activeSection === "tasks" && <TaskAiFix items={items} onApplied={refresh} />}
     </div>
   );
 }
@@ -467,6 +646,11 @@ function TaskRow({
   onRename,
   onOpenContext,
   onDelete,
+  onDragStart,
+  onDragOver,
+  onDrop,
+  onDragEnd,
+  isDragging = false,
 }: {
   item: WorkItem;
   progress?: WorkItemSessionProgress;
@@ -474,6 +658,11 @@ function TaskRow({
   onRename: (id: string, title: string) => Promise<void>;
   onOpenContext: (item: WorkItem) => void;
   onDelete: (item: WorkItem) => void;
+  onDragStart?: (event: DragEvent<HTMLButtonElement>, item: WorkItem) => void;
+  onDragOver?: (event: DragEvent<HTMLElement>, item: WorkItem) => void;
+  onDrop?: (event: DragEvent<HTMLElement>, item: WorkItem) => void;
+  onDragEnd?: () => void;
+  isDragging?: boolean;
 }) {
   const [isEditing, setIsEditing] = useState(false);
   const [title, setTitle] = useState(item.title);
@@ -492,7 +681,12 @@ function TaskRow({
   }
 
   return (
-    <article className={`task-row ${item.status === "review" ? "needs-review" : ""}`}>
+    <article
+      className={`task-row ${item.status === "review" ? "needs-review" : ""} ${onDragStart ? "is-sortable" : ""} ${isDragging ? "is-dragging" : ""}`}
+      onDragOver={onDragOver ? (event) => onDragOver(event, item) : undefined}
+      onDrop={onDrop ? (event) => onDrop(event, item) : undefined}
+    >
+      {onDragStart && <button className="task-drag-handle" type="button" draggable aria-label={`${item.title} 순서 변경`} title="드래그해 순서 변경" onDragStart={(event) => onDragStart(event, item)} onDragEnd={onDragEnd}><GripVertical size={16} strokeWidth={1.7} /></button>}
       <button
         className="check-button"
         type="button"
@@ -503,16 +697,20 @@ function TaskRow({
         {isEditing ? (
           <form className="task-title-editor" onSubmit={submitTitle}>
             <input value={title} onChange={(event) => setTitle(event.target.value)} autoFocus aria-label="작업 이름" />
-            <button className="task-title-save" type="submit" aria-label="작업 이름 저장">✓</button>
-            <button type="button" aria-label="취소" onClick={() => { setTitle(item.title); setIsEditing(false); }}>×</button>
+            <button className="task-title-save" type="submit" aria-label="작업 이름 저장"><Check size={14} strokeWidth={2} aria-hidden="true" /></button>
+            <button type="button" aria-label="취소" onClick={() => { setTitle(item.title); setIsEditing(false); }}><X size={14} strokeWidth={2} aria-hidden="true" /></button>
           </form>
         ) : <strong onDoubleClick={() => setIsEditing(true)}>{item.title}</strong>}
-        <span>{progress ? `AI 세션 ${progress.done}/${progress.total} 완료` : "AI 세션 연결 필요"}</span>
+        <span>생성 {formatWorkItemCreatedAt(item.createdAt)} · {progress ? `AI 세션 ${progress.done}/${progress.total} 완료` : "AI 세션 연결 필요"}</span>
+        {(item.priority || item.targetAt) && <div className="task-planning-meta">
+          {item.priority && <small className={`task-priority-tag ${item.priority}`}>{item.priority.toUpperCase()}</small>}
+          {item.targetAt && <small className={`task-target-time ${new Date(item.targetAt).getTime() <= Date.now() ? "is-overdue" : ""}`}><AlarmClock size={12} strokeWidth={1.8} aria-hidden="true" />{formatWorkItemTargetAt(item.targetAt)}</small>}
+        </div>}
         {renameError && <small className="task-inline-error">{renameError}</small>}
       </div>
-      <button className="task-icon-action" type="button" aria-label={`${item.title} 이름 수정`} onClick={() => setIsEditing(true)}>✎</button>
-      <button className="task-delete-action" type="button" aria-label={`${item.title} 삭제`} onClick={() => onDelete(item)}><TrashIcon /></button>
-      <button className="task-link-action" type="button" onClick={() => onOpenContext(item)}>연결</button>
+      <button className="task-icon-action" type="button" aria-label={`${item.title} 이름 수정`} onClick={() => setIsEditing(true)}><Pencil size={14} strokeWidth={1.8} aria-hidden="true" /></button>
+      <button className="task-delete-action" type="button" aria-label={`${item.title} 삭제`} onClick={() => onDelete(item)}><Trash2 size={14} strokeWidth={1.8} aria-hidden="true" /></button>
+      <button className="task-link-action" type="button" title="연결된 컨텍스트 보기" aria-label={`${item.title} 연결된 컨텍스트 보기`} onClick={() => onOpenContext(item)}><Link2 size={14} strokeWidth={1.8} aria-hidden="true" /></button>
       <label className="status-select">
         <span className="sr-only">{item.title} 상태</span>
         <select value={item.status} onChange={(event) => onMove(item.id, event.target.value as WorkItemStatus)}>
@@ -520,7 +718,7 @@ function TaskRow({
           <option value="ai_running">진행 중</option>
           <option value="done">완료</option>
         </select>
-        <i aria-hidden="true">⌄</i>
+        <i aria-hidden="true"><ChevronDown size={13} strokeWidth={2} /></i>
       </label>
     </article>
   );
@@ -590,6 +788,9 @@ function TaskStatusView({
   onDelete,
   sessionProgress,
   onAdd,
+  sortMode,
+  onSortModeChange,
+  onReorder,
 }: {
   status: Exclude<WorkItemStatus, "focus">;
   items: WorkItem[];
@@ -600,7 +801,13 @@ function TaskStatusView({
   onDelete: (item: WorkItem) => void;
   sessionProgress: Record<string, WorkItemSessionProgress>;
   onAdd: () => void;
+  sortMode: TaskSortMode;
+  onSortModeChange: (mode: TaskSortMode) => void;
+  onReorder: (status: WorkItemStatus, orderedIds: string[]) => Promise<void>;
 }) {
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [isSortUnlockOpen, setIsSortUnlockOpen] = useState(false);
+  const sortedItems = useMemo(() => sortWorkItems(items, sortMode), [items, sortMode]);
   const descriptions: Record<Exclude<WorkItemStatus, "focus">, string> = {
     inbox: "아직 분류하지 않은 작업",
     todo: "실행할 준비가 된 작업",
@@ -610,21 +817,53 @@ function TaskStatusView({
     done: "완료한 작업",
   };
 
+  function startDrag(event: DragEvent<HTMLButtonElement>, item: WorkItem) {
+    if (sortMode !== "manual") {
+      event.preventDefault();
+      setIsSortUnlockOpen(true);
+      return;
+    }
+    setDraggingId(item.id);
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", item.id);
+  }
+
+  function dropItem(event: DragEvent<HTMLElement>, target: WorkItem) {
+    event.preventDefault();
+    if (!draggingId || draggingId === target.id) return;
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const placeAfter = event.clientY > bounds.top + bounds.height / 2;
+    const orderedIds = reorderWorkItemIds(sortedItems.map(({ id }) => id), draggingId, target.id, placeAfter);
+    setDraggingId(null);
+    void onReorder(status, orderedIds);
+  }
+
   return (
+    <>
     <section className="task-status-page">
       <header>
         <div>
           <h2>{statusMeta[status].label}</h2>
           <p>{descriptions[status]}</p>
         </div>
-        <span>{items.length}개</span>
+        <div className="task-sort-actions">
+          <span>{items.length}개</span>
+          <label>
+            <span className="sr-only">Task 정렬 방식</span>
+            <select value={sortMode} onChange={(event) => onSortModeChange(event.target.value as TaskSortMode)}>
+              <option value="manual">수동 정렬</option>
+              <option value="newest">최신 생성순</option>
+              <option value="oldest">오래된 생성순</option>
+            </select>
+          </label>
+        </div>
       </header>
 
       {isLoading ? (
         <div className="empty-state">작업을 불러오는 중…</div>
       ) : items.length > 0 ? (
         <div className="task-list status-task-list">
-          {items.map((item) => <TaskRow key={item.id} item={item} progress={sessionProgress[item.id]} onMove={onMove} onRename={onRename} onOpenContext={onOpenContext} onDelete={onDelete} />)}
+          {sortedItems.map((item) => <TaskRow key={item.id} item={item} progress={sessionProgress[item.id]} onMove={onMove} onRename={onRename} onOpenContext={onOpenContext} onDelete={onDelete} onDragStart={startDrag} onDragOver={(event) => { if (draggingId) event.preventDefault(); }} onDrop={dropItem} onDragEnd={() => setDraggingId(null)} isDragging={draggingId === item.id} />)}
         </div>
       ) : (
         <div className="empty-state">
@@ -633,22 +872,20 @@ function TaskStatusView({
         </div>
       )}
     </section>
-  );
-}
-
-function TrashIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path d="M4 7h16M9 7V4h6v3m-8 0 1 13h8l1-13M10 11v5m4-5v5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-function GitHubNavIcon() {
-  return (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-      <path d="M12 2C6.48 2 2 6.58 2 12.23c0 4.52 2.87 8.35 6.84 9.71.5.1.68-.22.68-.49v-1.91c-2.78.62-3.37-1.21-3.37-1.21-.45-1.18-1.11-1.49-1.11-1.49-.91-.64.07-.62.07-.62 1 .07 1.53 1.05 1.53 1.05.9 1.57 2.35 1.12 2.92.86.09-.66.35-1.12.64-1.38-2.22-.26-4.56-1.14-4.56-5.06 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.28 2.75 1.05A9.34 9.34 0 0 1 12 6.94a9.3 9.3 0 0 1 2.5.35c1.91-1.33 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.93-2.35 4.8-4.58 5.05.36.32.68.94.68 1.9v2.81c0 .27.18.59.69.49A10.24 10.24 0 0 0 22 12.23C22 6.58 17.52 2 12 2Z" />
-    </svg>
+    {isSortUnlockOpen && (
+      <div className="modal-backdrop" onMouseDown={() => setIsSortUnlockOpen(false)}>
+        <section className="sort-unlock-modal" onMouseDown={(event) => event.stopPropagation()}>
+          <div className="sort-unlock-icon"><GripVertical size={18} strokeWidth={1.8} /></div>
+          <h2>정렬을 해제하시겠습니까?</h2>
+          <p>현재 날짜순으로 정렬되어 있습니다. 드래그로 순서를 바꾸려면 수동 정렬로 전환해야 합니다.</p>
+          <div>
+            <button type="button" onClick={() => setIsSortUnlockOpen(false)}>아니요</button>
+            <button className="primary-button" type="button" onClick={() => { onSortModeChange("manual"); setIsSortUnlockOpen(false); }}>예, 정렬 해제</button>
+          </div>
+        </section>
+      </div>
+    )}
+    </>
   );
 }
 
@@ -678,7 +915,7 @@ function DeleteTaskModal({
   return (
     <div className="modal-backdrop" onMouseDown={onClose}>
       <section className="delete-task-modal" onMouseDown={(event) => event.stopPropagation()}>
-        <div className="delete-task-icon"><TrashIcon /></div>
+        <div className="delete-task-icon"><Trash2 size={18} strokeWidth={1.8} aria-hidden="true" /></div>
         <h2>Task를 삭제할까요?</h2>
         <strong>{item.title}</strong>
         <p>Jira·GitHub 연결은 함께 제거됩니다. AI 세션 원본은 유지되고 이 Task와의 연결만 해제됩니다.</p>
@@ -697,9 +934,12 @@ function TaskComposer({
   onCreated,
 }: {
   onClose: () => void;
-  onCreated: (task: { id: string; title: string }) => Promise<void>;
+  onCreated: (task: { id: string; title: string; description: string; collectAiContext: boolean }) => Promise<void>;
 }) {
   const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [collectAiContext, setCollectAiContext] = useState(true);
+  const [targetAt, setTargetAt] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
@@ -709,9 +949,18 @@ function TaskComposer({
     setIsSaving(true);
     setSaveError(null);
     try {
+      if (targetAt && !(await requestTaskReminderPermission())) {
+        throw new Error("macOS 알림 권한을 허용해야 목표 시간 알림을 받을 수 있습니다.");
+      }
       const normalizedTitle = title.trim();
-      const id = await createWorkItem({ title: normalizedTitle, status: "todo" });
-      await onCreated({ id, title: normalizedTitle });
+      const normalizedDescription = description.trim();
+      const id = await createWorkItem({
+        title: normalizedTitle,
+        goal: normalizedDescription,
+        status: "todo",
+        targetAt: targetAt ? new Date(targetAt).toISOString() : null,
+      });
+      await onCreated({ id, title: normalizedTitle, description: normalizedDescription, collectAiContext });
     } catch (cause) {
       setSaveError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -724,10 +973,15 @@ function TaskComposer({
       <form className="composer" onSubmit={submit} onMouseDown={(event) => event.stopPropagation()}>
         <div className="composer-heading">
           <div><span>새 Orbit Task</span><h2>무엇을 해야 하나요?</h2></div>
-          <button type="button" onClick={onClose} aria-label="닫기">×</button>
+          <button type="button" onClick={onClose} aria-label="닫기"><X size={18} strokeWidth={1.8} aria-hidden="true" /></button>
         </div>
         <label>작업 제목<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="예: GitHub OAuth callback 구현" autoFocus /></label>
-        <p className="composer-flow-note">Task를 만들면 AI가 관련 Jira 티켓과 작업 세션을 찾아 연결을 제안합니다.</p>
+        <label>Description <span>선택</span><textarea value={description} onChange={(event) => setDescription(event.target.value)} placeholder="상세 설명을 적으면 AI가 더 컨텍스트를 잘 가져와요!" rows={4} /></label>
+        <label>목표 시간 <span>선택</span><input type="datetime-local" value={targetAt} onChange={(event) => setTargetAt(event.target.value)} /><small className="composer-field-help">이 시간까지 완료되지 않으면 Mac 알림을 한 번 보내드려요.</small></label>
+        <label className="composer-ai-context-option">
+          <input type="checkbox" checked={collectAiContext} onChange={(event) => setCollectAiContext(event.target.checked)} />
+          <span><strong>AI Context 수집</strong><small>Task 생성 후 관련 AI 세션, Jira 티켓과 Slack 메시지를 찾습니다.</small></span>
+        </label>
         {saveError && <div className="composer-error" role="alert">저장하지 못했습니다. <small>{saveError}</small></div>}
         <div className="composer-actions">
           <button type="button" onClick={onClose}>취소</button>
@@ -735,6 +989,49 @@ function TaskComposer({
         </div>
       </form>
     </div>
+  );
+}
+
+function TaskTargetEditor({ item, onChanged }: { item: WorkItem; onChanged: () => Promise<void> }) {
+  const [targetAt, setTargetAt] = useState(() => toDateTimeLocalValue(item.targetAt));
+  const [isSaving, setIsSaving] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    setTargetAt(toDateTimeLocalValue(item.targetAt));
+  }, [item.targetAt]);
+
+  async function saveTarget(event: FormEvent) {
+    event.preventDefault();
+    setIsSaving(true);
+    setMessage(null);
+    try {
+      if (targetAt && !(await requestTaskReminderPermission())) {
+        throw new Error("시스템 설정에서 Orbit의 알림을 허용해주세요.");
+      }
+      await updateWorkItemTargetAt(item.id, targetAt ? new Date(targetAt).toISOString() : null);
+      await onChanged();
+      setMessage(targetAt ? "목표 시간과 알림을 저장했습니다." : "목표 시간을 해제했습니다.");
+    } catch (cause) {
+      setMessage(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  return (
+    <form className="task-target-editor" onSubmit={saveTarget}>
+      <div className="task-target-heading">
+        <i><AlarmClock size={16} strokeWidth={1.8} aria-hidden="true" /></i>
+        <span><strong>목표 시간</strong><small>미완료 상태로 시간이 지나면 Mac 알림을 한 번 보냅니다.</small></span>
+      </div>
+      <div className="task-target-controls">
+        <input type="datetime-local" value={targetAt} onChange={(event) => { setTargetAt(event.target.value); setMessage(null); }} aria-label="목표 시간" />
+        {item.targetAt && <button type="button" onClick={() => setTargetAt("")} disabled={isSaving}>해제</button>}
+        <button className="primary-button" type="submit" disabled={isSaving}>{isSaving ? "저장 중…" : "저장"}</button>
+      </div>
+      {message && <p>{message}</p>}
+    </form>
   );
 }
 
@@ -833,7 +1130,7 @@ function TaskContextModal({ item, onClose, onChanged }: { item: WorkItem; onClos
     setAutoConnectMessage(null);
     try {
       setError(null);
-      const result = await autoConnectTaskAiSessions(item.id, item.title);
+      const result = await autoConnectTaskAiSessions(item.id, item.title, item.goal || "");
       setAutoConnectMessage(result.connected.length > 0
         ? `${result.connected.length}개의 관련 세션을 자동으로 연결했습니다.`
         : "관련도가 충분히 높은 AI 세션을 찾지 못했습니다.");
@@ -847,14 +1144,17 @@ function TaskContextModal({ item, onClose, onChanged }: { item: WorkItem; onClos
   }
 
   const jiraLinks = links.filter((link) => link.kind === "jira");
+  const slackLinks = links.filter((link) => link.kind === "slack");
 
   return (
     <div className="modal-backdrop task-context-backdrop" onMouseDown={onClose}>
       <section className="task-context-modal task-context-drawer" onMouseDown={(event) => event.stopPropagation()}>
         <header>
-          <div><span>Task · Context</span><h2>{item.title}</h2><p>Jira와 GitHub 개발 흐름, AI 작업 세션을 한곳에서 확인합니다.</p></div>
-          <button type="button" onClick={onClose} aria-label="닫기">×</button>
+          <div><span>Task · Context</span><h2>{item.title}</h2><p>{item.goal || "Jira와 GitHub 개발 흐름, AI 작업 세션을 한곳에서 확인합니다."}</p><small>생성 {formatWorkItemCreatedAt(item.createdAt)}</small></div>
+          <button type="button" onClick={onClose} aria-label="닫기"><X size={18} strokeWidth={1.8} aria-hidden="true" /></button>
         </header>
+
+        <TaskTargetEditor item={item} onChanged={onChanged} />
 
         <DevelopmentSection development={development} isLoading={isJiraSyncing} />
 
@@ -862,7 +1162,7 @@ function TaskContextModal({ item, onClose, onChanged }: { item: WorkItem; onClos
           <div className="context-section-title"><strong>Jira</strong><span>{isJiraSyncing ? "개발 정보 동기화 중…" : `${jiraLinks.length}개 연결됨`}</span></div>
           {jiraLinks.map((link) => (
             <div className="context-link-row external" key={link.id}>
-              <i className="jira">J</i>
+              <i className="service jira"><ServiceIcon kind="jira" size={17} /></i>
               <div><strong>{link.label}</strong><span>Jira 이슈{link.status !== "linked" ? ` · ${link.status}` : ""}</span></div>
               <div className="context-row-actions">
                 {link.externalUrl && <button type="button" onClick={() => void openUrl(link.externalUrl!)}>열기</button>}
@@ -873,18 +1173,33 @@ function TaskContextModal({ item, onClose, onChanged }: { item: WorkItem; onClos
           {jiraLinks.length === 0 && <div className="context-empty-row">연결된 Jira 티켓이 없습니다.</div>}
         </div>
 
+        <div className="context-section">
+          <div className="context-section-title"><strong>Slack</strong><span>{slackLinks.length}개 연결됨</span></div>
+          {slackLinks.map((link) => (
+            <div className="context-link-row external slack-link-row" key={link.id}>
+              <i className="service slack"><ServiceIcon kind="slack" size={17} /></i>
+              <div><strong>{link.label}</strong><span>Slack 원문 메시지</span></div>
+              <div className="context-row-actions">
+                {link.externalUrl && <button type="button" onClick={() => void openUrl(link.externalUrl!)}>원문</button>}
+                <button type="button" onClick={async () => { await deleteWorkItemLink(link.id); await refreshContext(); }}>해제</button>
+              </div>
+            </div>
+          ))}
+          {slackLinks.length === 0 && <div className="context-empty-row">연결된 Slack 메시지가 없습니다.</div>}
+        </div>
+
         <div className="context-section ai-auto-section">
           <div className="context-section-title"><strong>AI 작업 세션</strong><span>{linkedSessions.length}개 연결됨</span></div>
           <button className="ai-auto-connect" type="button" onClick={() => void autoConnectSessions()} disabled={isAutoConnecting}>
-            <i>✦</i>
-            <span><strong>{isAutoConnecting ? "AI가 관련 세션을 찾는 중…" : "AI로 세션 자동 연결"}</strong><small>Task 제목과 최근 대화를 분석해 관련도가 높은 세션만 연결합니다.</small></span>
+            <i><Sparkles size={15} strokeWidth={1.8} aria-hidden="true" /></i>
+            <span><strong>{isAutoConnecting ? "AI가 관련 세션을 찾는 중…" : "AI로 세션 자동 연결"}</strong><small>Task 제목·Description과 최근 대화를 분석해 관련도가 높은 세션만 연결합니다.</small></span>
             <b>{isAutoConnecting ? "분석 중" : "자동 연결"}</b>
           </button>
           {autoConnectMessage && <p className="ai-auto-message">{autoConnectMessage}</p>}
           {linkedSessions.map((session) => (
             <div className="context-link-row" key={`${session.provider}:${session.sessionId}`}>
-              <i className={session.provider}>{session.provider === "claude" ? "C" : "O"}</i>
-              <div><strong>{displaySessionTitle(session)}</strong><span>{session.provider} · {projectName(session.cwd)} · {session.completionState === "done" ? "완료" : "진행 중"}</span></div>
+              <i className={`service ${serviceIconForProvider(session.provider)}`}><ServiceIcon kind={serviceIconForProvider(session.provider)} size={17} /></i>
+              <div><strong>{displaySessionTitle(session)}</strong><span>{session.provider === "claude" ? "Claude" : "Codex"} · {projectName(session.cwd)} · {session.completionState === "done" ? "완료" : "진행 중"}</span></div>
               <div className="context-row-actions">
                 <button className={session.completionState === "done" ? "done" : ""} type="button" onClick={() => void toggleSessionCompletion(session)}>{session.completionState === "done" ? "다시 진행" : "완료 표시"}</button>
                 <button type="button" onClick={() => void disconnectSession(session)}>해제</button>
@@ -916,10 +1231,10 @@ function DevelopmentSection({ development, isLoading }: {
         <span>{isLoading ? "GitHub 개발 정보 찾는 중…" : tickets}</span>
       </div>
       <div className="development-summary" aria-label="GitHub 개발 정보 요약">
-        <DevelopmentMetric symbol="⑂" label="브랜치" count={branches.length} />
-        <DevelopmentMetric symbol="⌁" label="커밋" count={commits.length} />
-        <DevelopmentMetric symbol="PR" label="Pull request" count={pullRequests.length} />
-        <DevelopmentMetric symbol="✓" label="빌드" count={builds.length} tone={builds.some((build) => build.conclusion === "failure") ? "danger" : "success"} />
+        <DevelopmentMetric icon={GitBranch} label="브랜치" count={branches.length} />
+        <DevelopmentMetric icon={GitCommitHorizontal} label="커밋" count={commits.length} />
+        <DevelopmentMetric icon={GitPullRequest} label="Pull request" count={pullRequests.length} />
+        <DevelopmentMetric icon={CircleCheck} label="빌드" count={builds.length} tone={builds.some((build) => build.conclusion === "failure") ? "danger" : "success"} />
       </div>
       {!isLoading && branches.length + commits.length + pullRequests.length + builds.length === 0 && (
         <div className="development-empty">Jira 티켓 키가 포함된 GitHub 개발 정보를 찾지 못했습니다.</div>
@@ -965,15 +1280,15 @@ function DevelopmentSection({ development, isLoading }: {
   );
 }
 
-function DevelopmentMetric({ symbol, label, count, tone = "" }: {
-  symbol: string;
+function DevelopmentMetric({ icon: Icon, label, count, tone = "" }: {
+  icon: LucideIcon;
   label: string;
   count: number;
   tone?: "" | "success" | "danger";
 }) {
   return (
     <div className={tone}>
-      <i>{symbol}</i>
+      <i><Icon size={14} strokeWidth={1.8} aria-hidden="true" /></i>
       <span><strong>{count}</strong>{label}</span>
     </div>
   );

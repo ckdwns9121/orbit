@@ -39,7 +39,7 @@ export async function listWorkItemLinks(workItemId: string): Promise<WorkItemLin
 
 export async function createWorkItemLink(
   workItemId: string,
-  kind: WorkItemLinkKind,
+  kind: Exclude<WorkItemLinkKind, "slack">,
   reference: string,
 ): Promise<string> {
   const value = reference.trim();
@@ -62,6 +62,20 @@ export async function createWorkItemLink(
     [id, workItemId, kind, externalId, isUrl ? value : null, label, new Date().toISOString()],
   );
   return id;
+}
+
+export async function createSlackMessageLink(
+  workItemId: string,
+  message: { id: string; permalink: string; channelName: string; userName: string; text: string },
+): Promise<void> {
+  const label = `#${message.channelName || "slack"} · ${message.userName || "알 수 없음"}: ${message.text.trim().slice(0, 240)}`;
+  const database = await getDatabase();
+  await database.execute(
+    `INSERT OR IGNORE INTO work_item_links (
+      id, work_item_id, kind, external_id, external_url, label, status, created_at
+    ) VALUES ($1, $2, 'slack', $3, $4, $5, 'linked', $6)`,
+    [crypto.randomUUID(), workItemId, message.id, message.permalink, label, new Date().toISOString()],
+  );
 }
 
 export async function deleteWorkItemLink(id: string): Promise<void> {

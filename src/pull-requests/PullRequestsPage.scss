@@ -2,7 +2,7 @@
 
 .pr-overview {
   display: grid;
-  grid-template-columns: repeat(3, minmax(130px, 180px));
+  grid-template-columns: repeat(4, minmax(120px, 170px));
   align-items: stretch;
   min-height: 88px;
   padding: 0 32px;
@@ -13,6 +13,7 @@
   > div + div { padding-left: 26px; }
   span { color: var(--text-muted); font-size: 10px; }
   strong { font-size: 23px; }
+  strong.accent { color: var(--accent); }
 }
 
 .pr-toolbar {
@@ -28,6 +29,11 @@
 }
 
 .pr-filters { display: flex; gap: 4px; }
+.pr-toolbar-groups { display: flex; align-items: center; gap: 16px; }
+.pr-view-switch { display: flex; padding: 3px; border: 1px solid var(--border); border-radius: 7px; background: var(--subtle); }
+.pr-view-switch button { min-height: 30px; padding-inline: 11px; color: var(--text-muted); border: 0; background: transparent; font-size: 10px; }
+.pr-view-switch button.active { color: var(--text); background: var(--surface); box-shadow: 0 1px 3px rgb(0 0 0 / 8%); font-weight: 700; }
+.pr-view-switch button span { display: inline-flex; min-width: 17px; height: 17px; margin-left: 5px; align-items: center; justify-content: center; color: var(--accent); border-radius: 9px; background: var(--accent-soft); font-size: 8px; }
 .pr-filters button { min-height: 31px; color: var(--text-muted); border-color: transparent; background: transparent; font-size: 10px; }
 .pr-filters button.active { color: var(--accent); border-color: var(--border); background: var(--accent-soft); font-weight: 700; }
 
@@ -64,6 +70,7 @@
 .pr-row-copy small { margin-top: 5px; color: var(--text-muted); font-size: 9px; }
 .pr-row-state { display: flex; max-width: 130px; flex-direction: column; align-items: flex-end; gap: 5px; }
 .pr-row-state em { color: #39744b; background: #e5f3e9; padding: 3px 6px; border-radius: 4px; font-size: 8px; font-style: normal; font-weight: 700; }
+.pr-row-state em.review-requested { color: var(--accent); background: var(--accent-soft); }
 .pr-row-state span { max-width: 130px; overflow: hidden; color: var(--accent); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
 .pr-row-state small { color: var(--text-muted); font-size: 8px; }
 
@@ -89,5 +96,6 @@
 
 @media (max-width: 1120px) {
   .pr-content { grid-template-columns: minmax(400px, 1fr) 300px; }
-  .pr-overview { grid-template-columns: repeat(3, minmax(110px, 150px)); }
+  .pr-overview { grid-template-columns: repeat(4, minmax(100px, 140px)); }
+  .pr-toolbar-groups { gap: 8px; }
 }

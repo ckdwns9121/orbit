@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { listWorkItems, moveWorkItem } from "../data/work-item-repository";
 import type { WorkItem } from "../domain/work-item";
+import { notifyDueWorkItems } from "../notifications/task-reminders";
 import "./TrayApp.scss";
 
 function formatTrayDate() {
@@ -41,6 +42,15 @@ export default function TrayApp() {
       window.removeEventListener("keydown", onKeyDown);
     };
   }, [refresh]);
+
+  useEffect(() => {
+    const checkReminders = () => void notifyDueWorkItems().catch((cause) => {
+      console.warn("목표 시간 알림을 확인하지 못했습니다.", cause);
+    });
+    checkReminders();
+    const interval = window.setInterval(checkReminders, 60_000);
+    return () => window.clearInterval(interval);
+  }, []);
 
   const focusItem = items.find((item) => item.status === "focus");
   const nextItems = useMemo(

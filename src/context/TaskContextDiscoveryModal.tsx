@@ -10,17 +10,19 @@ import {
   type ContextCandidate,
   type ContextCandidateSource,
 } from "../domain/context-discovery";
+import ServiceIcon, { serviceIconForProvider, type ServiceIconKind } from "../components/ServiceIcon";
 import "./TaskContextDiscoveryModal.scss";
 
 interface DiscoveryTask {
   id: string;
   title: string;
+  description: string;
 }
 
-const sourceMeta: Record<ContextCandidateSource, { label: string; symbol: string }> = {
-  ai_session: { label: "AI 세션", symbol: "AI" },
-  jira: { label: "Jira", symbol: "J" },
-  slack: { label: "Slack", symbol: "S" },
+const sourceMeta: Record<ContextCandidateSource, { label: string; icon: ServiceIconKind }> = {
+  ai_session: { label: "AI 세션", icon: "openai" },
+  jira: { label: "Jira", icon: "jira" },
+  slack: { label: "Slack", icon: "slack" },
 };
 
 export default function TaskContextDiscoveryModal({
@@ -44,7 +46,7 @@ export default function TaskContextDiscoveryModal({
     setResult(null);
     setError(null);
     setProgress({ percent: 3, label: "컨텍스트 탐색을 준비하고 있어요" });
-    void discoverTaskContext(task.title, (next) => {
+    void discoverTaskContext(task.title, task.description, (next) => {
       if (!cancelled) setProgress(next);
     }).then((next) => {
       if (cancelled) return;
@@ -54,11 +56,14 @@ export default function TaskContextDiscoveryModal({
       if (!cancelled) setError(cause instanceof Error ? cause.message : String(cause));
     });
     return () => { cancelled = true; };
-  }, [attempt, task.title]);
+  }, [attempt, task.description, task.title]);
 
   const counts = useMemo(() => {
-    const next: Record<ContextCandidateSource, number> = { ai_session: 0, jira: 0, slack: 0 };
-    result?.candidates.forEach((candidate) => { next[candidate.source] += 1; });
+    const next = { codex: 0, claude: 0, jira: 0, slack: 0 };
+    result?.candidates.forEach((candidate) => {
+      if (candidate.source === "ai_session") next[candidate.provider === "claude" ? "claude" : "codex"] += 1;
+      else next[candidate.source] += 1;
+    });
     return next;
   }, [result]);
 
@@ -92,7 +97,7 @@ export default function TaskContextDiscoveryModal({
           <div>
             <span>새 Task · 컨텍스트 연결</span>
             <h2 id="context-discovery-title">{result ? "관련 작업을 찾았습니다" : "Task 컨텍스트 수집 중…"}</h2>
-            <p>{task.title}</p>
+            <p>{task.title}{task.description ? ` · ${task.description}` : ""}</p>
           </div>
           <button type="button" onClick={onClose} aria-label="나중에 연결">×</button>
         </header>
@@ -114,7 +119,7 @@ export default function TaskContextDiscoveryModal({
               <span>{progress.percent}%</span>
             </div>
             <SourceSteps activePercent={progress.percent} />
-            <p className="context-discovery-privacy">후보의 제목과 요약만 OpenAI로 보내 관련도를 분석합니다. 원문 전체는 전송하지 않습니다.</p>
+            <p className="context-discovery-privacy">Task 제목·Description과 후보 요약을 OpenAI로 보내 관련도를 분석합니다. Slack은 메시지 일부가 후보 요약에 포함됩니다.</p>
           </div>
         )}
 
@@ -129,9 +134,10 @@ export default function TaskContextDiscoveryModal({
         {result && (
           <>
             <div className="context-discovery-source-summary">
-              <SourceSummary symbol="AI" label="AI 세션" value={counts.ai_session + "개"} />
-              <SourceSummary symbol="J" label="Jira 티켓" value={counts.jira + "개"} />
-              <SourceSummary symbol="S" label="Slack" value="연동 준비 중" muted />
+              <SourceSummary icon="openai" label="Codex" value={counts.codex + "개"} />
+              <SourceSummary icon="claude" label="Claude" value={counts.claude + "개"} />
+              <SourceSummary icon="jira" label="Jira 티켓" value={counts.jira + "개"} />
+              <SourceSummary icon="slack" label="Slack 메시지" value={counts.slack + "개"} />
             </div>
 
             {result.notices.length > 0 && (
@@ -195,8 +201,9 @@ export default function TaskContextDiscoveryModal({
 
 function SourceSteps({ activePercent }: { activePercent: number }) {
   const steps = [
-    { label: "AI 세션", doneAt: 36 },
-    { label: "Jira 티켓", doneAt: 62 },
+    { label: "AI 세션", doneAt: 30 },
+    { label: "Jira 티켓", doneAt: 50 },
+    { label: "Slack 메시지", doneAt: 68 },
     { label: "AI 관련도 분석", doneAt: 100 },
   ];
   return (
@@ -211,15 +218,15 @@ function SourceSteps({ activePercent }: { activePercent: number }) {
   );
 }
 
-function SourceSummary({ symbol, label, value, muted = false }: {
-  symbol: string;
+function SourceSummary({ icon, label, value, muted = false }: {
+  icon: ServiceIconKind;
   label: string;
   value: string;
   muted?: boolean;
 }) {
   return (
     <div className={muted ? "muted" : ""}>
-      <i>{symbol}</i>
+      <i className={icon}><ServiceIcon kind={icon} size={15} /></i>
       <span>{label}</span>
       <strong>{value}</strong>
     </div>
@@ -232,13 +239,19 @@ function CandidateRow({ candidate, selected, onToggle }: {
   onToggle: () => void;
 }) {
   const meta = sourceMeta[candidate.source];
+  const icon = candidate.source === "ai_session" && candidate.provider
+    ? serviceIconForProvider(candidate.provider)
+    : meta.icon;
+  const sourceLabel = candidate.source === "ai_session"
+    ? candidate.provider === "claude" ? "Claude" : "Codex"
+    : meta.label;
   return (
     <label className={"context-discovery-candidate " + (selected ? "selected" : "")}>
       <input type="checkbox" checked={selected} onChange={onToggle} />
-      <i className={candidate.source}>{meta.symbol}</i>
+      <i className={icon}><ServiceIcon kind={icon} size={17} /></i>
       <span>
         <strong>{candidate.title}</strong>
-        <small>{meta.label} · {candidate.detail}</small>
+        <small>{sourceLabel} · {candidate.detail}</small>
         <em>{candidate.reason}</em>
       </span>
       <b>{candidate.score}%</b>

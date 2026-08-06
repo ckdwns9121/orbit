@@ -11,6 +11,7 @@ import { createWorkItemLink } from "../data/work-item-link-repository";
 import "./PullRequestsPage.scss";
 
 type Filter = "all" | "session" | "linked";
+type PullRequestView = "authored" | "review";
 const PR_ROW_HEIGHT = 84;
 const PR_OVERSCAN = 5;
 
@@ -19,6 +20,7 @@ export default function PullRequestsPage({ workItems }: { workItems: WorkItem[] 
   const [links, setLinks] = useState<PullRequestTaskLink[]>([]);
   const [selectedUrl, setSelectedUrl] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>("all");
+  const [view, setView] = useState<PullRequestView>("authored");
   const [query, setQuery] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -45,7 +47,7 @@ export default function PullRequestsPage({ workItems }: { workItems: WorkItem[] 
     try {
       const result = await refreshPullRequestsFromSessions();
       await loadCache();
-      if (result.repositoriesScanned === 0) {
+      if (result.repositoriesScanned === 0 && result.pullRequests.length === 0) {
         setNotice("AI 세션 경로에서 GitHub 저장소를 찾지 못했습니다.");
       } else if (result.warnings.length > 0) {
         setNotice(`${result.repositoriesSucceeded}/${result.repositoriesScanned}개 저장소를 갱신했습니다.`);
@@ -72,11 +74,13 @@ export default function PullRequestsPage({ workItems }: { workItems: WorkItem[] 
   const filtered = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase();
     return pullRequests.filter((item) => {
+      if (view === "authored" && !item.authoredByViewer) return false;
+      if (view === "review" && !item.reviewRequested) return false;
       if (filter === "session" && item.sessionMatchCount === 0) return false;
       if (filter === "linked" && !linkByUrl.has(item.url)) return false;
       return !normalized || `${item.repository} ${item.title} ${item.headRefName}`.toLocaleLowerCase().includes(normalized);
     });
-  }, [filter, linkByUrl, pullRequests, query]);
+  }, [filter, linkByUrl, pullRequests, query, view]);
 
   const selected = filtered.find((item) => item.url === selectedUrl) || filtered[0] || null;
   const selectedLink = selected ? linkByUrl.get(selected.url) : undefined;
@@ -95,16 +99,23 @@ export default function PullRequestsPage({ workItems }: { workItems: WorkItem[] 
   return (
     <section className="pull-requests-page">
       <div className="pr-overview">
-        <div><span>내가 올린 열린 PR{isRefreshing ? " · 동기화 중" : ""}</span><strong>{pullRequests.length}</strong></div>
+        <div><span>내가 올린 열린 PR{isRefreshing ? " · 동기화 중" : ""}</span><strong>{pullRequests.filter((item) => item.authoredByViewer).length}</strong></div>
+        <div><span>내 리뷰 대기</span><strong className="accent">{pullRequests.filter((item) => item.reviewRequested).length}</strong></div>
         <div><span>세션 브랜치 일치</span><strong>{pullRequests.filter((item) => item.sessionMatchCount > 0).length}</strong></div>
         <div><span>Task 연결</span><strong>{links.length}</strong></div>
       </div>
 
       <div className="pr-toolbar">
-        <div className="pr-filters">
-          <button className={filter === "all" ? "active" : ""} type="button" onClick={() => setFilter("all")}>내 PR 전체</button>
-          <button className={filter === "session" ? "active" : ""} type="button" onClick={() => setFilter("session")}>세션 브랜치</button>
-          <button className={filter === "linked" ? "active" : ""} type="button" onClick={() => setFilter("linked")}>Task 연결됨</button>
+        <div className="pr-toolbar-groups">
+          <div className="pr-view-switch" role="tablist" aria-label="Pull Request 구분">
+            <button className={view === "authored" ? "active" : ""} type="button" role="tab" aria-selected={view === "authored"} onClick={() => setView("authored")}>내가 올린 PR</button>
+            <button className={view === "review" ? "active" : ""} type="button" role="tab" aria-selected={view === "review"} onClick={() => setView("review")}>내 리뷰 대기 <span>{pullRequests.filter((item) => item.reviewRequested).length}</span></button>
+          </div>
+          <div className="pr-filters">
+            <button className={filter === "all" ? "active" : ""} type="button" onClick={() => setFilter("all")}>전체</button>
+            <button className={filter === "session" ? "active" : ""} type="button" onClick={() => setFilter("session")}>세션 브랜치</button>
+            <button className={filter === "linked" ? "active" : ""} type="button" onClick={() => setFilter("linked")}>Task 연결됨</button>
+          </div>
         </div>
         <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="PR, 저장소, 브랜치 검색" aria-label="Pull Request 검색" />
       </div>
@@ -113,12 +124,12 @@ export default function PullRequestsPage({ workItems }: { workItems: WorkItem[] 
       {notice && <div className="pr-message">{notice}</div>}
 
       <div className="pr-content">
-        <div className="pr-list" aria-label="내가 올린 Pull Request 목록">
+        <div className="pr-list" aria-label={view === "review" ? "내 리뷰 대기 Pull Request 목록" : "내가 올린 Pull Request 목록"}>
           {isLoading ? (
             <div className="pr-empty">캐시를 불러오는 중…</div>
           ) : filtered.length === 0 ? (
             <div className="pr-empty">
-              <strong>내가 올린 열린 Pull Request가 없습니다</strong>
+              <strong>{view === "review" ? "리뷰가 요청된 열린 Pull Request가 없습니다" : "내가 올린 열린 Pull Request가 없습니다"}</strong>
               <span>AI 세션의 Git 저장소를 기준으로 탭에 들어올 때마다 자동 확인합니다.</span>
             </div>
           ) : (
@@ -127,7 +138,7 @@ export default function PullRequestsPage({ workItems }: { workItems: WorkItem[] 
               selectedUrl={selected?.url || null}
               linkByUrl={linkByUrl}
               onSelect={setSelectedUrl}
-              resetKey={`${filter}:${query}`}
+              resetKey={`${view}:${filter}:${query}`}
             />
           )}
         </div>
@@ -138,7 +149,7 @@ export default function PullRequestsPage({ workItems }: { workItems: WorkItem[] 
               <div className="pr-detail-heading">
                 <span>{selected.repository} · #{selected.number}</span>
                 <h2>{selected.title}</h2>
-                <p>{selected.headRefName} <i>→</i> {selected.baseRefName}</p>
+                <p>{selected.headRefName && selected.baseRefName ? <>{selected.headRefName} <i>→</i> {selected.baseRefName}</> : "브랜치 정보는 GitHub에서 확인"}</p>
               </div>
               <dl>
                 <div><dt>작성자</dt><dd>{selected.authorLogin ? `@${selected.authorLogin}` : "알 수 없음"}</dd></div>
@@ -193,10 +204,11 @@ const PullRequestRow = memo(function PullRequestRow({
       <div className="pr-row-copy">
         <span>{pullRequest.repository} #{pullRequest.number}</span>
         <strong>{pullRequest.title}</strong>
-        <small>{pullRequest.headRefName} → {pullRequest.baseRefName}</small>
+        <small>{pullRequest.headRefName && pullRequest.baseRefName ? `${pullRequest.headRefName} → ${pullRequest.baseRefName}` : `@${pullRequest.authorLogin || "unknown"} · 리뷰 대기`}</small>
       </div>
       <div className="pr-row-state">
         {pullRequest.sessionMatchCount > 0 && <em>세션 {pullRequest.sessionMatchCount}</em>}
+        {pullRequest.reviewRequested && <em className="review-requested">리뷰 요청</em>}
         {linkedTask && <span>{linkedTask.workItemTitle}</span>}
         {pullRequest.isDraft && <small>Draft</small>}
       </div>

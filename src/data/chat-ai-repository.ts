@@ -1,10 +1,10 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type { ChatMessage } from "../domain/chat";
+import { taskProposalFromToolCall, type ChatTaskProposal, type CreateTaskToolCall } from "../domain/chat-task-proposal";
 import { listCalendarEvents } from "./calendar-event-repository";
 import { searchConfluencePages } from "./confluence-page-repository";
 import { listCachedPullRequests } from "./github-pull-request-repository";
 import { listCachedJiraIssues } from "./jira-issue-repository";
-import { getAppSettings } from "./settings-repository";
 import { searchSlackMessages } from "./slack-message-repository";
 import { listWorkItems } from "./work-item-repository";
 
@@ -44,17 +44,20 @@ export interface StreamAnswer {
   content: string;
   responseId: string | null;
   cancelled: boolean;
+  taskProposals: ChatTaskProposal[];
 }
 
 interface ChatToolPlan {
   calls: ChatToolCall[];
 }
 
-interface ChatToolCall {
+interface SearchChatToolCall {
   callId: string;
   name: "search_slack_messages" | "search_confluence_pages";
   arguments: unknown;
 }
+
+type ChatToolCall = SearchChatToolCall | CreateTaskToolCall;
 
 interface SearchToolArguments {
   query: string;
@@ -139,7 +142,7 @@ export function buildConfluenceToolCql(arguments_: SearchToolArguments): string 
 }
 
 async function executeToolCall(
-  call: ChatToolCall,
+  call: SearchChatToolCall,
   onSource: (source: ContextSourceStatus) => void,
 ): Promise<{ call: Record<string, unknown>; output: Record<string, unknown> }> {
   const arguments_ = parseSearchToolArguments(call.arguments);
@@ -179,12 +182,22 @@ async function executeToolCall(
   };
 }
 
+function approvalRequiredToolResult(call: CreateTaskToolCall, proposal: ChatTaskProposal | null) {
+  const result = proposal
+    ? { ok: false, status: "approval_required", title: proposal.title, description: proposal.description }
+    : { ok: false, status: "invalid_arguments", error: "A non-empty title is required." };
+  return {
+    call: { type: "function_call", call_id: call.callId, name: call.name, arguments: JSON.stringify(call.arguments) },
+    output: { type: "function_call_output", call_id: call.callId, output: JSON.stringify(result) },
+  };
+}
+
 export async function streamAnswerWithOrbitContext(
   question: string,
   messages: ChatMessage[],
+  model: string,
   callbacks: StreamCallbacks,
 ): Promise<StreamAnswer> {
-  const settings = await getAppSettings();
   const conversation = messages.slice(-12).map((message) => ({ role: message.role, content: message.content }));
   const planningStatus = (id: "slack" | "confluence") => {
     const source = initialContextSources.find((item) => item.id === id)!;
@@ -192,23 +205,28 @@ export async function streamAnswerWithOrbitContext(
   };
   planningStatus("slack");
   planningStatus("confluence");
-  const [context, plan] = await Promise.all([
-    buildOrbitContext(new Date(), callbacks.onSource),
-    invoke<ChatToolPlan>("plan_chat_tools", {
-      model: settings.openai_model || null,
-      question,
-      conversation,
-      localDate: new Intl.DateTimeFormat("sv-SE").format(new Date()),
-    }),
-  ]);
-  const executed = await Promise.all(plan.calls.map((call) => executeToolCall(call, callbacks.onSource)));
+  const context = await buildOrbitContext(new Date(), callbacks.onSource);
+  const plan = await invoke<ChatToolPlan>("plan_chat_tools", {
+    model,
+    question,
+    conversation,
+    context,
+    localDate: new Intl.DateTimeFormat("sv-SE").format(new Date()),
+  });
+  const taskProposals = plan.calls
+    .filter((call): call is CreateTaskToolCall => call.name === "create_task")
+    .map(taskProposalFromToolCall)
+    .filter((proposal): proposal is ChatTaskProposal => proposal !== null);
+  const executed = await Promise.all(plan.calls.map((call) => call.name === "create_task"
+    ? approvalRequiredToolResult(call, taskProposalFromToolCall(call))
+    : executeToolCall(call, callbacks.onSource)));
   for (const id of ["slack", "confluence"] as const) {
     if (!plan.calls.some((call) => call.name === (id === "slack" ? "search_slack_messages" : "search_confluence_pages"))) {
       const source = initialContextSources.find((item) => item.id === id)!;
       callbacks.onSource({ ...source, state: "complete", count: 0, detail: "이번 질문에는 검색 불필요" });
     }
   }
-  if (callbacks.signal?.aborted) return { content: "", responseId: null, cancelled: true };
+  if (callbacks.signal?.aborted) return { content: "", responseId: null, cancelled: true, taskProposals: [] };
 
   const requestId = crypto.randomUUID();
   const channel = new Channel<ChatStreamEvent>();
@@ -232,7 +250,7 @@ export async function streamAnswerWithOrbitContext(
     await invoke("stream_chat_with_orbit_context", {
       request: {
         requestId,
-        model: settings.openai_model || null,
+        model,
         question,
         context,
         conversation,
@@ -241,7 +259,12 @@ export async function streamAnswerWithOrbitContext(
       },
       onEvent: channel,
     });
-    return { content, responseId, cancelled: cancelled || Boolean(callbacks.signal?.aborted) };
+    return {
+      content,
+      responseId,
+      cancelled: cancelled || Boolean(callbacks.signal?.aborted),
+      taskProposals: cancelled || callbacks.signal?.aborted ? [] : taskProposals,
+    };
   } finally {
     callbacks.signal?.removeEventListener("abort", cancel);
   }

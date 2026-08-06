@@ -9,7 +9,10 @@ export type SettingKey =
   | "slack_workspace_id"
   | "slack_user_name"
   | "slack_user_id"
-  | "openai_model";
+  | "openai_model"
+  | "glm_base_url"
+  | "quick_panel_shortcut"
+  | "chat_shortcut";
 
 export type AppSettings = Partial<Record<SettingKey, string>>;
 

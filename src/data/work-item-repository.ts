@@ -6,6 +6,7 @@ import type {
   WorkItemStatus,
 } from "../domain/work-item";
 import { getDatabase } from "./database";
+import type { TaskAiFixSuggestion } from "../domain/task-ai-fix";
 
 interface WorkItemRow {
   id: string;
@@ -19,6 +20,8 @@ interface WorkItemRow {
   checkpoint: string | null;
   next_action: string | null;
   done_definition: string | null;
+  target_at: string | null;
+  reminder_sent_at: string | null;
   position: number;
   created_at: string;
   updated_at: string;
@@ -27,7 +30,7 @@ interface WorkItemRow {
 
 const selectFields = `
   id, title, status, priority, source, external_id, external_url,
-  goal, checkpoint, next_action, done_definition, position,
+  goal, checkpoint, next_action, done_definition, target_at, reminder_sent_at, position,
   created_at, updated_at, completed_at
 `;
 
@@ -44,6 +47,8 @@ function toWorkItem(row: WorkItemRow): WorkItem {
     checkpoint: row.checkpoint,
     nextAction: row.next_action,
     doneDefinition: row.done_definition,
+    targetAt: row.target_at,
+    reminderSentAt: row.reminder_sent_at,
     position: row.position,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -67,7 +72,8 @@ export async function listWorkItems(): Promise<WorkItem[]> {
         WHEN 'done' THEN 6
       END,
       position ASC,
-      updated_at DESC
+      created_at DESC,
+      id DESC
   `);
 
   return rows.map(toWorkItem);
@@ -93,8 +99,8 @@ export async function createWorkItem(input: CreateWorkItemInput): Promise<string
   await database.execute(
     `INSERT INTO work_items (
       id, title, status, priority, source, goal, next_action, done_definition,
-      position, created_at, updated_at
-    ) VALUES ($1, $2, $3, $4, 'orbit', $5, $6, $7, $8, $9, $9)`,
+      target_at, position, created_at, updated_at
+    ) VALUES ($1, $2, $3, $4, 'orbit', $5, $6, $7, $8, $9, $10, $10)`,
     [
       id,
       input.title.trim(),
@@ -103,6 +109,7 @@ export async function createWorkItem(input: CreateWorkItemInput): Promise<string
       input.goal?.trim() || null,
       input.nextAction?.trim() || null,
       input.doneDefinition?.trim() || null,
+      input.targetAt ?? null,
       next_position,
       now,
     ],
@@ -114,17 +121,6 @@ export async function moveWorkItem(id: string, status: WorkItemStatus): Promise<
   const database = await getDatabase();
   const now = new Date().toISOString();
   const completedAt = status === "done" ? now : null;
-
-  if (status === "done") {
-    const [{ total, unfinished }] = await database.select<Array<{ total: number; unfinished: number }>>(
-      `SELECT COUNT(*) AS total,
-        SUM(CASE WHEN completion_state = 'done' THEN 0 ELSE 1 END) AS unfinished
-       FROM ai_sessions WHERE linked_work_item_id = $1`,
-      [id],
-    );
-    if (total === 0) throw new Error("Task를 완료하려면 AI 작업 세션을 하나 이상 연결해주세요.");
-    if (unfinished > 0) throw new Error(`연결된 AI 작업 세션 ${unfinished}개가 아직 진행 중입니다.`);
-  }
 
   if (status === "focus") {
     await database.execute(
@@ -138,9 +134,26 @@ export async function moveWorkItem(id: string, status: WorkItemStatus): Promise<
     return;
   }
 
+  const [{ next_position }] = await database.select<Array<{ next_position: number }>>(
+    "SELECT COALESCE(MAX(position), -1) + 1 AS next_position FROM work_items WHERE status = $1",
+    [status],
+  );
   await database.execute(
-    "UPDATE work_items SET status = $1, completed_at = $2, updated_at = $3 WHERE id = $4",
-    [status, completedAt, now, id],
+    "UPDATE work_items SET status = $1, completed_at = $2, updated_at = $3, position = $4 WHERE id = $5",
+    [status, completedAt, now, next_position, id],
+  );
+}
+
+export async function reorderWorkItems(status: WorkItemStatus, orderedIds: string[]): Promise<void> {
+  if (orderedIds.length < 2) return;
+  const database = await getDatabase();
+  const positionCases = orderedIds.map((_, index) => `WHEN $${index + 1} THEN ${index}`).join(" ");
+  const idPlaceholders = orderedIds.map((_, index) => `$${index + 1}`).join(", ");
+  await database.execute(
+    `UPDATE work_items
+     SET position = CASE id ${positionCases} ELSE position END
+     WHERE status = $${orderedIds.length + 1} AND id IN (${idPlaceholders})`,
+    [...orderedIds, status],
   );
 }
 
@@ -166,6 +179,69 @@ export async function updateWorkItemTitle(id: string, title: string): Promise<vo
     "UPDATE work_items SET title = $1, updated_at = $2 WHERE id = $3",
     [normalized, new Date().toISOString(), id],
   );
+}
+
+export async function updateWorkItemTargetAt(id: string, targetAt: string | null): Promise<void> {
+  const database = await getDatabase();
+  await database.execute(
+    `UPDATE work_items
+     SET target_at = $1, reminder_sent_at = NULL, updated_at = $2
+     WHERE id = $3`,
+    [targetAt, new Date().toISOString(), id],
+  );
+}
+
+export async function applyTaskAiFixes(suggestions: TaskAiFixSuggestion[]): Promise<void> {
+  if (suggestions.length === 0) return;
+  const database = await getDatabase();
+  const now = new Date().toISOString();
+  const values: Array<string> = [];
+  const priorityCases: string[] = [];
+  const targetCases: string[] = [];
+  const idPlaceholders: string[] = [];
+  for (const suggestion of suggestions) {
+    const idIndex = values.push(suggestion.id);
+    const priorityIndex = values.push(suggestion.priority);
+    const targetIndex = values.push(suggestion.targetAt);
+    priorityCases.push(`WHEN $${idIndex} THEN $${priorityIndex}`);
+    targetCases.push(`WHEN $${idIndex} THEN $${targetIndex}`);
+    idPlaceholders.push(`$${idIndex}`);
+  }
+  const updatedAtIndex = values.push(now);
+  await database.execute(
+    `UPDATE work_items
+     SET priority = CASE id ${priorityCases.join(" ")} ELSE priority END,
+         target_at = CASE id ${targetCases.join(" ")} ELSE target_at END,
+         reminder_sent_at = NULL,
+         updated_at = $${updatedAtIndex}
+     WHERE status <> 'done' AND id IN (${idPlaceholders.join(", ")})`,
+    values,
+  );
+}
+
+export async function claimDueWorkItemReminders(now = new Date()): Promise<WorkItem[]> {
+  const database = await getDatabase();
+  const nowIso = now.toISOString();
+  const rows = await database.select<WorkItemRow[]>(
+    `SELECT ${selectFields}
+     FROM work_items
+     WHERE target_at IS NOT NULL
+       AND target_at <= $1
+       AND reminder_sent_at IS NULL
+       AND status <> 'done'
+     ORDER BY target_at ASC, created_at ASC`,
+    [nowIso],
+  );
+
+  if (rows.length > 0) {
+    const placeholders = rows.map((_, index) => `$${index + 2}`).join(", ");
+    await database.execute(
+      `UPDATE work_items SET reminder_sent_at = $1
+       WHERE reminder_sent_at IS NULL AND id IN (${placeholders})`,
+      [nowIso, ...rows.map(({ id }) => id)],
+    );
+  }
+  return rows.map(toWorkItem);
 }
 
 export async function deleteWorkItem(id: string): Promise<void> {

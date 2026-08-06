@@ -1,4 +1,4 @@
-export type WorkItemLinkKind = "jira" | "github_pr" | "github_commit";
+export type WorkItemLinkKind = "jira" | "github_pr" | "github_commit" | "slack";
 
 export interface WorkItemLink {
   id: string;

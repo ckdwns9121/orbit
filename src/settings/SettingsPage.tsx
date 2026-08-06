@@ -1,5 +1,17 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import {
+  Bot,
+  Calendar,
+  Command,
+  Hash,
+  KeyRound,
+  Kanban,
+  RotateCcw,
+  SlidersHorizontal,
+  Terminal,
+  type LucideIcon,
+} from "lucide-react";
 import { getAppSettings, setAppSettings, type AppSettings } from "../data/settings-repository";
 import {
   connectGoogleCalendar,
@@ -16,16 +28,38 @@ import {
   type SlackConnection,
 } from "./slack-connection";
 import "./SettingsPage.scss";
+import {
+  DEFAULT_CHAT_SHORTCUT,
+  DEFAULT_QUICK_PANEL_SHORTCUT,
+  displayShortcut,
+  isSystemMinimizeShortcut,
+  shortcutFromKeyboardEvent,
+  shortcutSettingsFromStored,
+  validateShortcutSettings,
+  type ShortcutSettings,
+} from "../domain/shortcuts";
+import {
+  getRegisteredShortcuts,
+  setShortcutCaptureActive,
+  syncGlobalShortcuts,
+} from "../shortcuts/global-shortcuts";
 
-type SettingsTab = "general" | "jira" | "google" | "slack" | "openai";
-type SecretId = "jira_api_token" | "google_client_secret" | "slack_oauth_token" | "openai_api_key";
+type SettingsTab = "general" | "shortcuts" | "jira" | "google" | "slack" | "ai";
+type SecretId =
+  | "jira_api_token"
+  | "google_client_secret"
+  | "slack_oauth_token"
+  | "openai_api_key"
+  | "claude_api_key"
+  | "glm_api_key";
 
-const tabs: Array<{ id: SettingsTab; label: string; symbol: string }> = [
-  { id: "general", label: "일반", symbol: "◐" },
-  { id: "jira", label: "Atlassian", symbol: "A" },
-  { id: "google", label: "Google Calendar", symbol: "G" },
-  { id: "slack", label: "Slack", symbol: "S" },
-  { id: "openai", label: "OpenAI", symbol: "AI" },
+const tabs: Array<{ id: SettingsTab; label: string; icon: LucideIcon }> = [
+  { id: "general", label: "일반", icon: SlidersHorizontal },
+  { id: "shortcuts", label: "단축키", icon: Command },
+  { id: "jira", label: "Atlassian", icon: Kanban },
+  { id: "google", label: "Google Calendar", icon: Calendar },
+  { id: "slack", label: "Slack", icon: Hash },
+  { id: "ai", label: "AI", icon: Bot },
 ];
 
 const secretIds: SecretId[] = [
@@ -33,6 +67,8 @@ const secretIds: SecretId[] = [
   "google_client_secret",
   "slack_oauth_token",
   "openai_api_key",
+  "claude_api_key",
+  "glm_api_key",
 ];
 
 const emptySecretStatus: Record<SecretId, boolean> = {
@@ -40,7 +76,11 @@ const emptySecretStatus: Record<SecretId, boolean> = {
   google_client_secret: false,
   slack_oauth_token: false,
   openai_api_key: false,
+  claude_api_key: false,
+  glm_api_key: false,
 };
+
+type CodexLoginStatus = { loggedIn: boolean; authMode: string | null };
 
 export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState<SettingsTab>("general");
@@ -101,7 +141,7 @@ export default function SettingsPage() {
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
           >
-            <span>{tab.symbol}</span>{tab.label}
+            <span><tab.icon size={13} strokeWidth={2} aria-hidden="true" /></span>{tab.label}
           </button>
         ))}
       </nav>
@@ -137,6 +177,21 @@ export default function SettingsPage() {
             onDeleteSecret={deleteSecret}
           />
         )}
+        {activeTab === "shortcuts" && (
+          <ShortcutSettingsSection
+            initial={shortcutSettingsFromStored(settings)}
+            onSave={async (next) => {
+              const previous = getRegisteredShortcuts();
+              await syncGlobalShortcuts(next);
+              try {
+                await saveValues({ quick_panel_shortcut: next.quickPanel, chat_shortcut: next.chat });
+              } catch (cause) {
+                if (previous) await syncGlobalShortcuts(previous);
+                throw cause;
+              }
+            }}
+          />
+        )}
         {activeTab === "google" && (
           <GoogleCalendarSettings
             clientId={settings.google_client_id ?? ""}
@@ -162,18 +217,10 @@ export default function SettingsPage() {
             onError={(cause) => setError(toMessage(cause))}
           />
         )}
-        {activeTab === "openai" && (
-          <ProviderSettings
-            eyebrow="OPENAI"
-            title="OpenAI 연결"
-            description="AI 작업 위임과 작업 요약에 사용할 개인 API 설정입니다."
-            fields={[
-              { key: "openai_model", label: "기본 모델 ID", placeholder: "사용할 모델 ID를 입력하세요", value: settings.openai_model ?? "" },
-            ]}
-            secretId="openai_api_key"
-            secretLabel="API Key"
-            secretPlaceholder="sk-…"
-            isSecretSaved={secretStatus.openai_api_key}
+        {activeTab === "ai" && (
+          <AiSettings
+            settings={settings}
+            secretStatus={secretStatus}
             onFieldChange={updateSetting}
             onSave={saveValues}
             onSaveSecret={saveSecret}
@@ -181,6 +228,111 @@ export default function SettingsPage() {
           />
         )}
       </section>
+    </div>
+  );
+}
+
+function ShortcutSettingsSection({ initial, onSave }: { initial: ShortcutSettings; onSave: (next: ShortcutSettings) => Promise<void> }) {
+  const [draft, setDraft] = useState(initial);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [localError, setLocalError] = useState<string | null>(null);
+  const [confirmSystemConflict, setConfirmSystemConflict] = useState(false);
+
+  async function save(explicitConflictConfirmation = false) {
+    const validationError = validateShortcutSettings(draft);
+    if (validationError) { setLocalError(validationError); return; }
+    if ((isSystemMinimizeShortcut(draft.quickPanel) || isSystemMinimizeShortcut(draft.chat)) && !explicitConflictConfirmation) {
+      setConfirmSystemConflict(true);
+      return;
+    }
+
+    setIsSaving(true);
+    setSaved(false);
+    setLocalError(null);
+    try {
+      await onSave(draft);
+      setSaved(true);
+      setConfirmSystemConflict(false);
+    } catch (cause) {
+      setLocalError(toMessage(cause));
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  function resetDefaults() {
+    setDraft({ quickPanel: DEFAULT_QUICK_PANEL_SHORTCUT, chat: DEFAULT_CHAT_SHORTCUT });
+    setConfirmSystemConflict(false);
+    setSaved(false);
+    setLocalError(null);
+  }
+
+  return (
+    <div className="settings-section">
+      <header><span>KEYBOARD</span><h2>전역 단축키</h2><p>Orbit이 백그라운드에 있어도 빠른 작업 패널이나 Chat을 바로 엽니다. 입력란을 선택한 뒤 원하는 조합을 누르세요.</p></header>
+      <div className="settings-card shortcut-settings-card">
+        <ShortcutRecorder
+          label="Task quick panel"
+          description="메인 창을 앞으로 가져오고 오늘 할 일 패널을 엽니다."
+          value={draft.quickPanel}
+          onChange={(quickPanel) => { setDraft((current) => ({ ...current, quickPanel })); setSaved(false); setConfirmSystemConflict(false); }}
+        />
+        <ShortcutRecorder
+          label="Chat"
+          description="메인 창을 열고 Chat 섹션으로 이동합니다."
+          value={draft.chat}
+          onChange={(chat) => { setDraft((current) => ({ ...current, chat })); setSaved(false); setConfirmSystemConflict(false); }}
+        />
+
+        {(isSystemMinimizeShortcut(draft.quickPanel) || isSystemMinimizeShortcut(draft.chat)) && (
+          <div className="shortcut-warning" role="alert">
+            <strong>⌘ M은 macOS 창 최소화 단축키입니다.</strong>
+            <span>Orbit 단축키가 시스템 동작보다 먼저 처리되거나 앱에 따라 충돌할 수 있습니다. 이 조합을 유지하려면 아래에서 명시적으로 확인해주세요.</span>
+          </div>
+        )}
+        {localError && <div className="shortcut-inline-error" role="alert">{localError}</div>}
+
+        <div className="shortcut-actions">
+          <button type="button" onClick={resetDefaults}><RotateCcw size={13} strokeWidth={1.8} /> 기본값 복원</button>
+          {saved && <span>저장됨</span>}
+          {confirmSystemConflict ? (
+            <>
+              <button type="button" onClick={() => setConfirmSystemConflict(false)}>취소</button>
+              <button className="danger-button" type="button" disabled={isSaving} onClick={() => void save(true)}>⌘ M 충돌을 이해하고 설정</button>
+            </>
+          ) : (
+            <button className="primary-button" type="button" disabled={isSaving} onClick={() => void save()}>{isSaving ? "등록 중…" : "단축키 저장"}</button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ShortcutRecorder({ label, description, value, onChange }: { label: string; description: string; value: string; onChange: (value: string) => void }) {
+  const [isRecording, setIsRecording] = useState(false);
+
+  useEffect(() => () => setShortcutCaptureActive(false), []);
+
+  return (
+    <div className={`shortcut-recorder ${isRecording ? "recording" : ""}`}>
+      <div><strong>{label}</strong><span>{description}</span></div>
+      <button
+        type="button"
+        aria-label={`${label} 단축키. 현재 ${displayShortcut(value)}`}
+        onFocus={() => { setIsRecording(true); setShortcutCaptureActive(true); }}
+        onBlur={() => { setIsRecording(false); setShortcutCaptureActive(false); }}
+        onKeyDown={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const shortcut = shortcutFromKeyboardEvent(event.nativeEvent);
+          if (shortcut) onChange(shortcut);
+        }}
+      >
+        <kbd>{displayShortcut(value)}</kbd>
+        <small>{isRecording ? "새 조합을 누르세요" : "변경"}</small>
+      </button>
     </div>
   );
 }
@@ -219,7 +371,7 @@ function SlackSettings({ isSecretSaved, storedConnection, onSaveToken, onVerifie
         <button type="button" className="primary-button" disabled={isBusy || (!token.trim() && !isSecretSaved)} onClick={() => void verify()}>{isBusy ? "확인 중…" : token.trim() ? "토큰 저장 후 연결" : "연결 확인"}</button>
       </div>
     </div>
-    <div className="security-note"><span>S</span><div><strong>Slack 앱에서 가져오는 값</strong><p>질문에서 추출한 핵심어로 관련 메시지만 검색하며 본문, 채널, 작성자, 시간과 원문 링크를 로컬에 캐시합니다.</p></div></div>
+    <div className="security-note"><span><Hash size={15} strokeWidth={1.8} aria-hidden="true" /></span><div><strong>Slack 앱에서 가져오는 값</strong><p>질문에서 추출한 핵심어로 관련 메시지만 검색하며 본문, 채널, 작성자, 시간과 원문 링크를 로컬에 캐시합니다.</p></div></div>
   </div>;
 }
 
@@ -303,7 +455,7 @@ function GoogleCalendarSettings({
           )}
         </div>
       </div>
-      <div className="security-note"><span>G</span><div><strong>Google Cloud 준비</strong><p>Google Calendar API를 활성화하고 OAuth 클라이언트 유형을 ‘데스크톱 앱’으로 만드세요. 리디렉션은 로그인할 때 Orbit이 localhost 포트를 자동으로 엽니다.</p></div></div>
+      <div className="security-note"><span><Calendar size={15} strokeWidth={1.8} aria-hidden="true" /></span><div><strong>Google Cloud 준비</strong><p>Google Calendar API를 활성화하고 OAuth 클라이언트 유형을 ‘데스크톱 앱’으로 만드세요. 리디렉션은 로그인할 때 Orbit이 localhost 포트를 자동으로 엽니다.</p></div></div>
     </div>
   );
 }
@@ -344,18 +496,165 @@ function GeneralSettings({ theme, onChange }: { theme: ThemePreference; onChange
           ))}
         </div>
       </div>
-      <div className="security-note"><span>⌘</span><div><strong>자격 증명 보안</strong><p>API 키와 토큰은 SQLite나 화면 상태에 보관하지 않고 macOS Keychain에만 저장합니다.</p></div></div>
+      <div className="security-note"><span><KeyRound size={15} strokeWidth={1.8} aria-hidden="true" /></span><div><strong>자격 증명 보안</strong><p>API 키와 토큰은 입력 중에만 폼에 존재하며, 저장할 때 SQLite가 아닌 macOS Keychain으로 전달됩니다.</p></div></div>
     </div>
   );
 }
 
 type Field = { key: keyof AppSettings; label: string; value: string; placeholder: string; type?: string };
 
+const aiProviders: Array<{ id: "openai" | "claude" | "glm"; label: string }> = [
+  { id: "openai", label: "OpenAI" },
+  { id: "claude", label: "Claude" },
+  { id: "glm", label: "GLM" },
+];
+
+function AiSettings({
+  settings, secretStatus, onFieldChange, onSave, onSaveSecret, onDeleteSecret,
+}: {
+  settings: AppSettings;
+  secretStatus: Record<SecretId, boolean>;
+  onFieldChange: (key: keyof AppSettings, value: string) => void;
+  onSave: (settings: AppSettings) => Promise<void>;
+  onSaveSecret: (id: SecretId, value: string) => Promise<void>;
+  onDeleteSecret: (id: SecretId) => Promise<void>;
+}) {
+  const [provider, setProvider] = useState<"openai" | "claude" | "glm">("openai");
+  const [codexStatus, setCodexStatus] = useState<CodexLoginStatus | null>(null);
+
+  useEffect(() => {
+    void invoke<CodexLoginStatus>("codex_login_status").then(setCodexStatus).catch(() => setCodexStatus(null));
+  }, []);
+
+  return (
+    <div className="settings-section">
+      <header>
+        <span>AI</span>
+        <h2>AI 연결</h2>
+        <p>Chat과 컨텍스트 분석에 사용할 모델 제공자별 인증 정보를 관리합니다. 입력한 API Key는 macOS Keychain에만 저장됩니다.</p>
+      </header>
+      <div className="ai-provider-tabs" role="tablist" aria-label="AI 제공자 선택">
+        {aiProviders.map((item) => (
+          <button
+            type="button"
+            role="tab"
+            key={item.id}
+            aria-selected={provider === item.id}
+            className={provider === item.id ? "active" : ""}
+            onClick={() => setProvider(item.id)}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
+
+      {provider === "openai" && (
+        <>
+          <ProviderCredentialForm
+            key="openai"
+            fields={[]}
+            secretId="openai_api_key"
+            secretLabel="API Key"
+            secretPlaceholder="sk-…"
+            isSecretSaved={secretStatus.openai_api_key}
+            onFieldChange={onFieldChange}
+            onSave={onSave}
+            onSaveSecret={onSaveSecret}
+            onDeleteSecret={onDeleteSecret}
+          />
+          <div className="security-note">
+            <span><Terminal size={15} strokeWidth={1.8} aria-hidden="true" /></span>
+            <div>
+              <strong>{codexStatus?.loggedIn && codexStatus.authMode === "chatgpt" ? "Codex · ChatGPT OAuth 연결됨" : "OpenAI API와 Codex 로그인"}</strong>
+              <p>
+                Orbit의 OpenAI API 호출은 공식 API Key 인증을 사용합니다. ChatGPT OAuth는 Codex CLI에 한해 로그인 상태를 확인하며, Orbit이 해당 토큰을 읽거나 API Key 대신 재사용하지 않습니다.
+                {" "}
+                {codexStatus?.loggedIn
+                  ? `이 기기의 Codex CLI는 현재 ${codexStatus.authMode === "chatgpt" ? "ChatGPT 계정으로" : codexStatus.authMode === "api_key" ? "API Key로" : "로그인된 상태로"} 감지되었습니다. Codex CLI 로그인 연동은 추후 지원할 예정이며, 그 자격 증명을 Orbit이 가져오지는 않습니다.`
+                  : "이 기기에서 Codex CLI 로그인 상태는 감지되지 않았습니다. OpenAI 기능은 위 API Key를 사용해 주세요."}
+              </p>
+            </div>
+          </div>
+        </>
+      )}
+
+      {provider === "claude" && (
+        <ProviderCredentialForm
+          key="claude"
+          fields={[]}
+          secretId="claude_api_key"
+          secretLabel="API Key"
+          secretPlaceholder="sk-ant-…"
+          isSecretSaved={secretStatus.claude_api_key}
+          onFieldChange={onFieldChange}
+          onSave={onSave}
+          onSaveSecret={onSaveSecret}
+          onDeleteSecret={onDeleteSecret}
+        />
+      )}
+
+      {provider === "glm" && (
+        <ProviderCredentialForm
+          key="glm"
+          fields={[{
+            key: "glm_base_url",
+            label: "API Base URL",
+            value: settings.glm_base_url ?? "",
+            placeholder: "https://api.z.ai/api/paas/v4",
+          }]}
+          secretId="glm_api_key"
+          secretLabel="API Key"
+          secretPlaceholder="GLM API Key"
+          isSecretSaved={secretStatus.glm_api_key}
+          onFieldChange={onFieldChange}
+          onSave={onSave}
+          onSaveSecret={onSaveSecret}
+          onDeleteSecret={onDeleteSecret}
+        />
+      )}
+
+      <div className="security-note">
+        <span><KeyRound size={15} strokeWidth={1.8} aria-hidden="true" /></span>
+        <div><strong>자격 증명 보안</strong><p>API 키는 입력 중에만 폼에 존재하며, 저장할 때 SQLite가 아닌 macOS Keychain으로 전달됩니다. 저장 후에는 값이 화면으로 다시 전달되지 않습니다.</p></div>
+      </div>
+    </div>
+  );
+}
+
 function ProviderSettings({
   eyebrow, title, description, fields, secretId, secretLabel, secretPlaceholder, isSecretSaved,
   onFieldChange, onSave, onSaveSecret, onDeleteSecret,
 }: {
   eyebrow: string; title: string; description: string; fields: Field[]; secretId: SecretId;
+  secretLabel: string; secretPlaceholder: string; isSecretSaved: boolean;
+  onFieldChange: (key: keyof AppSettings, value: string) => void;
+  onSave: (settings: AppSettings) => Promise<void>;
+  onSaveSecret: (id: SecretId, value: string) => Promise<void>;
+  onDeleteSecret: (id: SecretId) => Promise<void>;
+}) {
+  return (
+    <div className="settings-section">
+      <header><span>{eyebrow}</span><h2>{title}</h2><p>{description}</p></header>
+      <ProviderCredentialForm
+        fields={fields}
+        secretId={secretId}
+        secretLabel={secretLabel}
+        secretPlaceholder={secretPlaceholder}
+        isSecretSaved={isSecretSaved}
+        onFieldChange={onFieldChange}
+        onSave={onSave}
+        onSaveSecret={onSaveSecret}
+        onDeleteSecret={onDeleteSecret}
+      />
+    </div>
+  );
+}
+
+function ProviderCredentialForm({
+  fields, secretId, secretLabel, secretPlaceholder, isSecretSaved,
+  onFieldChange, onSave, onSaveSecret, onDeleteSecret,
+}: {
+  fields: Field[]; secretId: SecretId;
   secretLabel: string; secretPlaceholder: string; isSecretSaved: boolean;
   onFieldChange: (key: keyof AppSettings, value: string) => void;
   onSave: (settings: AppSettings) => Promise<void>;
@@ -384,25 +683,22 @@ function ProviderSettings({
   }
 
   return (
-    <div className="settings-section">
-      <header><span>{eyebrow}</span><h2>{title}</h2><p>{description}</p></header>
-      <form className="provider-form" onSubmit={submit}>
-        <div className="connection-status">
-          <span className={isSecretSaved ? "connected" : ""} />
-          <div><strong>{isSecretSaved ? "자격 증명 저장됨" : "연결 정보 없음"}</strong><small>{isSecretSaved ? "Keychain에서 안전하게 관리 중" : "필수 정보를 입력해 주세요"}</small></div>
-        </div>
-        {fields.map((field) => (
-          <label key={field.key}>{field.label}<input type={field.type ?? "text"} value={field.value} placeholder={field.placeholder} onChange={(event) => onFieldChange(field.key, event.target.value)} /></label>
-        ))}
-        <label>{secretLabel}<div className="secret-field"><input type="password" value={secret} autoComplete="off" placeholder={isSecretSaved ? "새 값으로 변경하려면 입력" : secretPlaceholder} onChange={(event) => setSecret(event.target.value)} />{isSecretSaved && <span>••••••••</span>}</div></label>
-        <p className="secret-help">저장 후에는 값이 화면으로 다시 전달되지 않습니다.</p>
-        <div className="provider-actions">
-          {isSecretSaved && <button type="button" className="danger-button" onClick={() => onDeleteSecret(secretId)}>자격 증명 삭제</button>}
-          <span>{saved ? "저장되었습니다" : ""}</span>
-          <button type="submit" className="primary-button" disabled={isSaving}>{isSaving ? "저장 중…" : "설정 저장"}</button>
-        </div>
-      </form>
-    </div>
+    <form className="provider-form" onSubmit={submit}>
+      <div className="connection-status">
+        <span className={isSecretSaved ? "connected" : ""} />
+        <div><strong>{isSecretSaved ? "자격 증명 저장됨" : "연결 정보 없음"}</strong><small>{isSecretSaved ? "Keychain에서 안전하게 관리 중" : "필수 정보를 입력해 주세요"}</small></div>
+      </div>
+      {fields.map((field) => (
+        <label key={field.key}>{field.label}<input type={field.type ?? "text"} value={field.value} placeholder={field.placeholder} onChange={(event) => onFieldChange(field.key, event.target.value)} /></label>
+      ))}
+      <label>{secretLabel}<div className="secret-field"><input type="password" value={secret} autoComplete="off" placeholder={isSecretSaved ? "새 값으로 변경하려면 입력" : secretPlaceholder} onChange={(event) => setSecret(event.target.value)} />{isSecretSaved && <span>••••••••</span>}</div></label>
+      <p className="secret-help">저장 후에는 값이 화면으로 다시 전달되지 않습니다.</p>
+      <div className="provider-actions">
+        {isSecretSaved && <button type="button" className="danger-button" onClick={() => onDeleteSecret(secretId)}>자격 증명 삭제</button>}
+        <span>{saved ? "저장되었습니다" : ""}</span>
+        <button type="submit" className="primary-button" disabled={isSaving}>{isSaving ? "저장 중…" : "설정 저장"}</button>
+      </div>
+    </form>
   );
 }
 

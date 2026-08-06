@@ -10,6 +10,8 @@ export interface GitHubPullRequest {
   updatedAt: string;
   authorLogin: string | null;
   sessionMatchCount: number;
+  authoredByViewer: boolean;
+  reviewRequested: boolean;
   discoveredAt: string;
 }
 

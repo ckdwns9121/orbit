@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ChatRole } from "../domain/chat";
+import type { ChatTaskProposal } from "../domain/chat-task-proposal";
 import ChatMarkdown from "./ChatMarkdown";
+import TaskApprovalCard from "./TaskApprovalCard";
 import { calculateVirtualRange } from "./virtual-range";
 
 export interface DisplayMessage {
@@ -8,14 +10,22 @@ export interface DisplayMessage {
   role: ChatRole;
   content: string;
   streaming?: boolean;
+  taskProposals?: ChatTaskProposal[];
 }
 
 function estimatedHeight(message: DisplayMessage) {
   if (message.role === "user") return 74;
-  return Math.min(560, 78 + Math.ceil(message.content.length / 72) * 23);
+  const proposalHeight = (message.taskProposals?.length ?? 0) * 150;
+  return Math.min(1_200, 78 + Math.ceil(message.content.length / 72) * 23 + proposalHeight);
 }
 
-function MeasuredMessage({ message, top, onHeight }: { message: DisplayMessage; top: number; onHeight: (id: string, height: number) => void }) {
+function MeasuredMessage({ message, top, onHeight, onApproveTask, onRejectTask }: {
+  message: DisplayMessage;
+  top: number;
+  onHeight: (id: string, height: number) => void;
+  onApproveTask: (id: string) => void;
+  onRejectTask: (id: string) => void;
+}) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const element = ref.current;
@@ -29,12 +39,24 @@ function MeasuredMessage({ message, top, onHeight }: { message: DisplayMessage; 
   return <div className="chat-virtual-row" ref={ref} style={{ transform: `translateY(${top}px)` }}>
     <article className={`chat-message ${message.role} ${message.streaming ? "streaming" : ""}`}>
       <span>{message.role === "user" ? "나" : "✦"}</span>
-      <ChatMarkdown content={message.content || "답변을 준비하고 있습니다…"} />
+      <div className="chat-message-content">
+        <ChatMarkdown content={message.content || "답변을 준비하고 있습니다…"} />
+        {message.taskProposals?.map((proposal) => <TaskApprovalCard
+          key={proposal.id}
+          proposal={proposal}
+          onApprove={onApproveTask}
+          onReject={onRejectTask}
+        />)}
+      </div>
     </article>
   </div>;
 }
 
-export default function VirtualMessageList({ messages }: { messages: DisplayMessage[] }) {
+export default function VirtualMessageList({ messages, onApproveTask, onRejectTask }: {
+  messages: DisplayMessage[];
+  onApproveTask: (id: string) => void;
+  onRejectTask: (id: string) => void;
+}) {
   const containerRef = useRef<HTMLDivElement>(null);
   const measurements = useRef(new Map<string, number>());
   const stickToBottom = useRef(true);
@@ -76,6 +98,8 @@ export default function VirtualMessageList({ messages }: { messages: DisplayMess
         message={message}
         top={range.offsets[range.start + index]}
         onHeight={reportHeight}
+        onApproveTask={onApproveTask}
+        onRejectTask={onRejectTask}
       />)}
     </div>
     {!stickToBottom.current && <button className="chat-jump-latest" type="button" onClick={() => {

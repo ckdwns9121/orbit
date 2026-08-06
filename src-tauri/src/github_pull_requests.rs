@@ -24,6 +24,8 @@ pub struct DiscoveredPullRequest {
     updated_at: String,
     author_login: Option<String>,
     session_match_count: usize,
+    authored_by_viewer: bool,
+    review_requested: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -52,6 +54,25 @@ struct GhPullRequest {
 #[derive(Debug, Deserialize)]
 struct GhAuthor {
     login: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GhSearchPullRequest {
+    number: u64,
+    title: String,
+    url: String,
+    #[serde(default)]
+    is_draft: bool,
+    updated_at: String,
+    author: Option<GhAuthor>,
+    repository: GhRepository,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GhRepository {
+    name_with_owner: String,
 }
 
 #[derive(Debug)]
@@ -163,35 +184,11 @@ fn scan(cwds: Vec<String>) -> Result<PullRequestScanResult, String> {
     let mut warnings = Vec::new();
     let mut repositories_succeeded = 0;
     for (repository, context) in &repositories {
-        let output = Command::new(&gh)
-            .args([
-                "pr",
-                "list",
-                "--repo",
-                repository,
-                "--state",
-                "open",
-                "--author",
-                "@me",
-                "--limit",
-                &MAX_PULL_REQUESTS_PER_REPOSITORY.to_string(),
-                "--json",
-                "number,title,url,headRefName,baseRefName,isDraft,updatedAt,author",
-            ])
-            .output();
-
-        let Ok(output) = output else {
-            warnings.push(format!("{repository}: GitHub CLI를 실행하지 못했습니다."));
-            continue;
-        };
-        if !output.status.success() {
+        let authored = fetch_pull_requests(&gh, repository, &["--author", "@me"]);
+        let Ok(items) = authored else {
             warnings.push(format!(
                 "{repository}: PR을 불러오지 못했습니다. gh 로그인을 확인해주세요."
             ));
-            continue;
-        }
-        let Ok(items) = serde_json::from_slice::<Vec<GhPullRequest>>(&output.stdout) else {
-            warnings.push(format!("{repository}: GitHub 응답을 읽지 못했습니다."));
             continue;
         };
         repositories_succeeded += 1;
@@ -213,8 +210,18 @@ fn scan(cwds: Vec<String>) -> Result<PullRequestScanResult, String> {
                 is_draft: item.is_draft,
                 updated_at: item.updated_at,
                 author_login: item.author.and_then(|author| author.login),
+                authored_by_viewer: true,
+                review_requested: false,
             });
         }
+    }
+
+    match fetch_review_requests(&gh) {
+        Ok(items) => merge_review_requests(&mut pull_requests, items),
+        Err(()) => warnings.push(
+            "GitHub 전체에서 내 리뷰 대기 PR을 불러오지 못했습니다. gh 로그인을 확인해주세요."
+                .to_string(),
+        ),
     }
 
     pull_requests.sort_by(|left, right| {
@@ -230,6 +237,77 @@ fn scan(cwds: Vec<String>) -> Result<PullRequestScanResult, String> {
         repositories_succeeded,
         warnings,
     })
+}
+
+fn fetch_review_requests(gh: &Path) -> Result<Vec<GhSearchPullRequest>, ()> {
+    let limit = MAX_PULL_REQUESTS_PER_REPOSITORY.to_string();
+    let output = Command::new(gh)
+        .args([
+            "search",
+            "prs",
+            "--review-requested",
+            "@me",
+            "--state",
+            "open",
+            "--limit",
+            &limit,
+            "--json",
+            "number,title,url,isDraft,updatedAt,author,repository",
+        ])
+        .output()
+        .map_err(|_| ())?;
+    if !output.status.success() {
+        return Err(());
+    }
+    serde_json::from_slice(&output.stdout).map_err(|_| ())
+}
+
+fn merge_review_requests(
+    pull_requests: &mut Vec<DiscoveredPullRequest>,
+    review_requests: Vec<GhSearchPullRequest>,
+) {
+    for item in review_requests {
+        if let Some(existing) = pull_requests.iter_mut().find(|pull| pull.url == item.url) {
+            existing.review_requested = true;
+            continue;
+        }
+        pull_requests.push(DiscoveredPullRequest {
+            repository: item.repository.name_with_owner,
+            repo_path: String::new(),
+            number: item.number,
+            title: item.title,
+            url: item.url,
+            head_ref_name: String::new(),
+            base_ref_name: String::new(),
+            is_draft: item.is_draft,
+            updated_at: item.updated_at,
+            author_login: item.author.and_then(|author| author.login),
+            session_match_count: 0,
+            authored_by_viewer: false,
+            review_requested: true,
+        });
+    }
+}
+
+fn fetch_pull_requests(
+    gh: &Path,
+    repository: &str,
+    filter_args: &[&str],
+) -> Result<Vec<GhPullRequest>, ()> {
+    let limit = MAX_PULL_REQUESTS_PER_REPOSITORY.to_string();
+    let mut args = vec!["pr", "list", "--repo", repository, "--state", "open"];
+    args.extend_from_slice(filter_args);
+    args.extend_from_slice(&[
+        "--limit",
+        &limit,
+        "--json",
+        "number,title,url,headRefName,baseRefName,isDraft,updatedAt,author",
+    ]);
+    let output = Command::new(gh).args(args).output().map_err(|_| ())?;
+    if !output.status.success() {
+        return Err(());
+    }
+    serde_json::from_slice(&output.stdout).map_err(|_| ())
 }
 
 fn command_text(executable: &Path, args: &[&str]) -> Option<String> {

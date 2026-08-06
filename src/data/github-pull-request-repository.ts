@@ -19,6 +19,8 @@ interface PullRequestRow {
   updated_at: string;
   author_login: string | null;
   session_match_count: number;
+  authored_by_viewer: number;
+  review_requested: number;
   discovered_at: string;
 }
 
@@ -35,6 +37,8 @@ function toPullRequest(row: PullRequestRow): GitHubPullRequest {
     updatedAt: row.updated_at,
     authorLogin: row.author_login,
     sessionMatchCount: row.session_match_count,
+    authoredByViewer: row.authored_by_viewer === 1,
+    reviewRequested: row.review_requested === 1,
     discoveredAt: row.discovered_at,
   };
 }
@@ -45,7 +49,8 @@ export async function listCachedPullRequests(): Promise<GitHubPullRequest[]> {
   const database = await getDatabase();
   const rows = await database.select<PullRequestRow[]>(`
     SELECT repository, repo_path, number, title, url, head_ref_name, base_ref_name,
-      is_draft, updated_at, author_login, session_match_count, discovered_at
+      is_draft, updated_at, author_login, session_match_count, authored_by_viewer,
+      review_requested, discovered_at
     FROM github_pull_requests
     ORDER BY session_match_count DESC, updated_at DESC
   `);
@@ -64,7 +69,7 @@ async function performPullRequestRefresh(): Promise<PullRequestScanResult> {
   const cwds = sessions.map((session) => session.cwd).filter((cwd): cwd is string => Boolean(cwd));
   const result = await invoke<PullRequestScanResult>("scan_session_pull_requests", { cwds });
 
-  if (result.repositoriesScanned > 0 && result.repositoriesSucceeded === 0) {
+  if (result.repositoriesScanned > 0 && result.repositoriesSucceeded === 0 && result.pullRequests.length === 0) {
     throw new Error(result.warnings[0] || "GitHub PR을 불러오지 못했습니다.");
   }
 
@@ -75,8 +80,9 @@ async function performPullRequestRefresh(): Promise<PullRequestScanResult> {
     await database.execute(
       `INSERT INTO github_pull_requests (
         repository, number, repo_path, title, url, head_ref_name, base_ref_name,
-        is_draft, updated_at, author_login, session_match_count, discovered_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+        is_draft, updated_at, author_login, session_match_count, authored_by_viewer,
+        review_requested, discovered_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
       [
         pullRequest.repository,
         pullRequest.number,
@@ -89,6 +95,8 @@ async function performPullRequestRefresh(): Promise<PullRequestScanResult> {
         pullRequest.updatedAt,
         pullRequest.authorLogin,
         pullRequest.sessionMatchCount,
+        pullRequest.authoredByViewer ? 1 : 0,
+        pullRequest.reviewRequested ? 1 : 0,
         discoveredAt,
       ],
     );

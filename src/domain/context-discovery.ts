@@ -12,6 +12,10 @@ export interface ContextCandidate {
   provider?: AiProvider;
   sessionId?: string;
   jiraKey?: string;
+  slackMessageId?: string;
+  slackChannelName?: string;
+  slackUserName?: string;
+  slackText?: string;
   url?: string;
 }
 

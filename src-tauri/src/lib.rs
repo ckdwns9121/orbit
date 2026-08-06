@@ -1,4 +1,7 @@
-use std::{collections::HashMap, sync::{Mutex, OnceLock}};
+use std::{
+    collections::HashMap,
+    sync::{Mutex, OnceLock},
+};
 use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Manager, WindowEvent,
@@ -6,6 +9,7 @@ use tauri::{
 use tauri_plugin_positioner::{Position, WindowExt};
 use tauri_plugin_sql::{Migration, MigrationKind};
 
+mod codex_auth;
 mod confluence;
 mod context_discovery;
 mod github_pull_requests;
@@ -14,6 +18,7 @@ mod jira_issue;
 mod local_ai_sessions;
 mod openai_chat;
 mod slack;
+mod task_prioritization;
 
 const KEYCHAIN_SERVICE: &str = "com.orbit.desktop";
 static SECRET_CACHE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
@@ -32,28 +37,38 @@ fn cached_secret(secret_id: &str) -> Result<Option<String>, String> {
 fn cache_secret(secret_id: &str, value: &str) -> Result<(), String> {
     secret_cache()
         .lock()
-        .map(|mut cache| { cache.insert(secret_id.to_owned(), value.to_owned()); })
+        .map(|mut cache| {
+            cache.insert(secret_id.to_owned(), value.to_owned());
+        })
         .map_err(|_| "자격 증명 메모리 캐시를 갱신하지 못했습니다.".to_string())
 }
 
 fn remove_cached_secret(secret_id: &str) -> Result<(), String> {
     secret_cache()
         .lock()
-        .map(|mut cache| { cache.remove(secret_id); })
+        .map(|mut cache| {
+            cache.remove(secret_id);
+        })
         .map_err(|_| "자격 증명 메모리 캐시를 정리하지 못했습니다.".to_string())
 }
 
 fn validate_secret_id(secret_id: &str) -> Result<(), String> {
     match secret_id {
-        "jira_api_token" | "google_client_secret" | "google_refresh_token" | "slack_oauth_token" | "openai_api_key" => {
-            Ok(())
-        }
+        "jira_api_token"
+        | "google_client_secret"
+        | "google_refresh_token"
+        | "slack_oauth_token"
+        | "openai_api_key"
+        | "claude_api_key"
+        | "glm_api_key" => Ok(()),
         _ => Err("지원하지 않는 보안 항목입니다.".into()),
     }
 }
 
 fn set_internal_secret(secret_id: &str, value: &str) -> Result<(), String> {
-    keychain_entry(secret_id)?.set_password(value).map_err(|error| error.to_string())?;
+    keychain_entry(secret_id)?
+        .set_password(value)
+        .map_err(|error| error.to_string())?;
     cache_secret(secret_id, value)
 }
 
@@ -150,9 +165,14 @@ mod secret_cache_tests {
     fn reuses_and_removes_cached_credentials() {
         let secret_id = "test_memory_only_secret";
         cache_secret(secret_id, "value").expect("cache secret");
-        assert_eq!(cached_secret(secret_id).expect("read cache").as_deref(), Some("value"));
+        assert_eq!(
+            cached_secret(secret_id).expect("read cache").as_deref(),
+            Some("value")
+        );
         remove_cached_secret(secret_id).expect("remove cache");
-        assert!(cached_secret(secret_id).expect("read empty cache").is_none());
+        assert!(cached_secret(secret_id)
+            .expect("read empty cache")
+            .is_none());
     }
 }
 
@@ -275,10 +295,36 @@ pub fn run() {
             sql: include_str!("../migrations/0016_confluence_search_cache.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 17,
+            description: "add_slack_work_item_links",
+            sql: include_str!("../migrations/0017_add_slack_work_item_links.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 18,
+            description: "add_pull_request_viewer_relations",
+            sql: include_str!("../migrations/0018_add_pull_request_viewer_relations.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 19,
+            description: "repair_work_item_delete_trigger",
+            sql: include_str!("../migrations/0019_repair_work_item_delete_trigger.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 20,
+            description: "add_work_item_target_time",
+            sql: include_str!("../migrations/0020_add_work_item_target_time.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_positioner::init())
         .plugin(
             tauri_plugin_sql::Builder::default()
@@ -329,6 +375,7 @@ pub fn run() {
             secret_status,
             set_secret,
             delete_secret,
+            codex_auth::codex_login_status,
             local_ai_sessions::scan_local_ai_sessions,
             context_discovery::rank_task_context,
             github_pull_requests::scan_session_pull_requests,
@@ -340,9 +387,11 @@ pub fn run() {
             slack::verify_slack_connection,
             slack::search_slack_messages,
             confluence::search_confluence_pages,
+            openai_chat::list_openai_chat_models,
             openai_chat::stream_chat_with_orbit_context,
             openai_chat::plan_chat_tools,
-            openai_chat::cancel_chat_stream
+            openai_chat::cancel_chat_stream,
+            task_prioritization::prioritize_work_items
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -24,6 +24,8 @@ export interface WorkItem {
   checkpoint: string | null;
   nextAction: string | null;
   doneDefinition: string | null;
+  targetAt: string | null;
+  reminderSentAt: string | null;
   position: number;
   createdAt: string;
   updatedAt: string;
@@ -37,6 +39,7 @@ export interface CreateWorkItemInput {
   goal?: string;
   nextAction?: string;
   doneDefinition?: string;
+  targetAt?: string | null;
 }
 
 export const statusMeta: Record<

@@ -5,7 +5,11 @@
   "windows": ["main", "tray"],
   "permissions": [
     "core:default",
+    "core:webview:allow-set-webview-zoom",
     "opener:default",
+    "notification:default",
+    "global-shortcut:allow-register",
+    "global-shortcut:allow-unregister",
     "sql:default",
     "sql:allow-execute"
   ]
