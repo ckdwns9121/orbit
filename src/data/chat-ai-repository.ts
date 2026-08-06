@@ -2,10 +2,12 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import type { ChatMessage } from "../domain/chat";
 import { taskProposalFromToolCall, type ChatTaskProposal, type CreateTaskToolCall } from "../domain/chat-task-proposal";
 import { listCalendarEvents } from "./calendar-event-repository";
-import { searchConfluencePages } from "./confluence-page-repository";
+import { searchCompletedWork, type CompletedWorkSearchResult } from "./completion-repository";
+import { searchConfluencePagesWithProvenance } from "./confluence-page-repository";
 import { listCachedPullRequests } from "./github-pull-request-repository";
 import { listCachedJiraIssues } from "./jira-issue-repository";
-import { searchSlackMessages } from "./slack-message-repository";
+import { queryCacheWarning, type QueryCacheProvenance } from "./query-cache-provenance";
+import { searchSlackMessagesWithProvenance } from "./slack-message-repository";
 import { listWorkItems } from "./work-item-repository";
 
 export type ContextSourceId = "tasks" | "calendar" | "jira" | "github" | "slack" | "confluence";
@@ -63,6 +65,77 @@ interface SearchToolArguments {
   query: string;
   dateFrom: string | null;
   dateTo: string | null;
+}
+
+type CompletedWorkSearcher = typeof searchCompletedWork;
+
+const completedWorkQuestionPatterns = [
+  /(?:완료|끝낸|마친|종료된)\s*(?:한|했던|된)?[^.!?\n]{0,60}(?:업무|작업|태스크)/,
+  /(?:완료|끝낸|마친|종료된)\s*(?:한|했던|된)?\s*일/,
+  /(?:지난|이전|과거|예전(?:에)?)\s*(?:의|에|했던)?\s*(?:일|업무|작업|태스크)/,
+  /(?:성과|회고|결정(?:사항)?|시행착오|실패|리스크).*(?:찾|검색|알려|뭐|무엇)/,
+  /(?:찾|검색|알려).*(?:성과|회고|결정(?:사항)?|시행착오|실패|리스크)/,
+  /\b(?:completed?|finished|done|previous|prior|past)\s+(?:work|task|project)s?\b/i,
+  /\b(?:retrospective|decision|risk|lesson)s?\b/i,
+];
+
+export function asksAboutCompletedWork(question: string): boolean {
+  return completedWorkQuestionPatterns.some((pattern) => pattern.test(question));
+}
+
+function compactContextValue(value: string, limit: number): string {
+  return value.replace(/\s+/g, " ").trim().slice(0, limit) || "기록 없음";
+}
+
+function formatCompletionEvidence(result: CompletedWorkSearchResult): string {
+  if (result.evidence.length === 0) return "저장된 근거 링크 없음";
+  return result.evidence.slice(0, 12).map((evidence) => {
+    const label = compactContextValue(evidence.label, 200);
+    const excerpt = evidence.excerpt ? ` — ${compactContextValue(evidence.excerpt, 400)}` : "";
+    return evidence.url ? `[${label}](${evidence.url})${excerpt}` : `${label}${excerpt}`;
+  }).join("; ");
+}
+
+function formatCompletedWork(result: CompletedWorkSearchResult): string {
+  return [
+    `- 작업: ${compactContextValue(result.workItemTitle, 300)}`,
+    `  완료 시각: ${result.completedAt}`,
+    `  결과: ${compactContextValue(result.resultSummary, 1_500)}`,
+    `  결정: ${compactContextValue(result.decisions, 1_500)}`,
+    `  남은 위험: ${compactContextValue(result.remainingRisk, 1_000)}`,
+    `  회고: ${compactContextValue(result.retrospective, 1_500)}`,
+    `  근거: ${formatCompletionEvidence(result)}`,
+    `  기록 출처: ${result.provenance === "legacy-inferred" ? "레거시 상태에서 추론됨" : "사용자가 저장한 완료 기록"}`,
+  ].join("\n");
+}
+
+export async function buildCompletedWorkGrounding(
+  question: string,
+  searcher: CompletedWorkSearcher = searchCompletedWork,
+): Promise<string> {
+  if (!asksAboutCompletedWork(question)) return "";
+  try {
+    const results = await searcher({ state: "active", limit: 50 });
+    if (results.length === 0) {
+      return [
+        "[Completed Work — 저장 기록 근거]",
+        "검색 결과: 저장된 완료 작업이 없습니다.",
+        "응답 규칙: 완료 작업, 결정, 실패, 위험 또는 근거가 있었다고 추론하거나 만들어내지 마세요.",
+      ].join("\n");
+    }
+    return [
+      "[Completed Work — 저장 기록 근거]",
+      `검색 결과: ${results.length}건. 질문과 관련된 기록만 사용하고, 아래에 없는 사실은 추가하지 마세요.`,
+      results.map(formatCompletedWork).join("\n"),
+    ].join("\n").slice(0, 30_000);
+  } catch (cause) {
+    const detail = cause instanceof Error ? compactContextValue(cause.message, 300) : "알 수 없는 조회 오류";
+    return [
+      "[Completed Work — 저장 기록 근거]",
+      `검색 실패: ${detail}`,
+      "응답 규칙: 완료 기록을 확인할 수 없으므로 완료 작업에 관한 사실을 추론하거나 만들어내지 마세요.",
+    ].join("\n");
+  }
 }
 
 async function collectSource<T>(
@@ -141,6 +214,18 @@ export function buildConfluenceToolCql(arguments_: SearchToolArguments): string 
   return clauses.join(" AND ");
 }
 
+export function buildChatQueryCacheContext(label: string, provenance: QueryCacheProvenance) {
+  return {
+    origin: provenance.origin,
+    freshness: provenance.freshness,
+    lastAttemptAt: provenance.lastAttemptAt,
+    lastSuccessAt: provenance.lastSuccessAt,
+    remoteErrorCategory: provenance.errorCategory,
+    remoteError: provenance.errorSummary,
+    warning: queryCacheWarning(label, provenance),
+  };
+}
+
 async function executeToolCall(
   call: SearchChatToolCall,
   onSource: (source: ContextSourceStatus) => void,
@@ -151,25 +236,37 @@ async function executeToolCall(
   let result: unknown;
   try {
     if (call.name === "search_slack_messages") {
-      const messages = await searchSlackMessages(buildSlackToolQuery(arguments_));
-      result = { ok: true, messages: messages.slice(0, 30).map((message) => ({
+      const search = await searchSlackMessagesWithProvenance(buildSlackToolQuery(arguments_));
+      const cacheContext = buildChatQueryCacheContext("Slack", search.provenance);
+      result = { ok: true, ...cacheContext, messages: search.items.slice(0, 30).map((message) => ({
         channel: message.channelName || message.channelId,
         author: message.userName,
         text: message.text.slice(0, 1_500),
         timestamp: message.messageTs,
         url: message.permalink,
       })) };
-      onSource({ ...source, state: "complete", count: messages.length, detail: `${messages.length}건 수집 완료` });
+      onSource({
+        ...source,
+        state: search.provenance.freshness === "stale-cache" ? "error" : "complete",
+        count: search.items.length,
+        detail: cacheContext.warning ?? `${search.items.length}건 수집 완료`,
+      });
     } else {
-      const pages = await searchConfluencePages(buildConfluenceToolCql(arguments_));
-      result = { ok: true, pages: pages.slice(0, 30).map((page) => ({
+      const search = await searchConfluencePagesWithProvenance(buildConfluenceToolCql(arguments_));
+      const cacheContext = buildChatQueryCacheContext("Confluence", search.provenance);
+      result = { ok: true, ...cacheContext, pages: search.items.slice(0, 30).map((page) => ({
         title: page.title,
         space: page.spaceKey,
         excerpt: page.excerpt.slice(0, 1_500),
         lastModified: page.lastModified,
         url: page.url,
       })) };
-      onSource({ ...source, state: "complete", count: pages.length, detail: `${pages.length}건 수집 완료` });
+      onSource({
+        ...source,
+        state: search.provenance.freshness === "stale-cache" ? "error" : "complete",
+        count: search.items.length,
+        detail: cacheContext.warning ?? `${search.items.length}건 수집 완료`,
+      });
     }
   } catch (cause) {
     const error = cause instanceof Error ? cause.message : String(cause);
@@ -205,7 +302,10 @@ export async function streamAnswerWithOrbitContext(
   };
   planningStatus("slack");
   planningStatus("confluence");
-  const context = await buildOrbitContext(new Date(), callbacks.onSource);
+  const now = new Date();
+  const baseContext = await buildOrbitContext(now, callbacks.onSource);
+  const completionGrounding = await buildCompletedWorkGrounding(question);
+  const context = [baseContext, completionGrounding].filter(Boolean).join("\n\n");
   const plan = await invoke<ChatToolPlan>("plan_chat_tools", {
     model,
     question,

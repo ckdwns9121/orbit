@@ -4,8 +4,10 @@ import type {
   PullRequestScanResult,
   PullRequestTaskLink,
 } from "../domain/github-pull-request";
+import { normalizeSourceScope, sourceDefinitions, stableScopeKey } from "../sources/source-capability";
 import { listAiSessions } from "./ai-session-repository";
 import { getDatabase } from "./database";
+import { runScopedSourceRefresh } from "./source-sync-repository";
 
 interface PullRequestRow {
   repository: string;
@@ -43,8 +45,6 @@ function toPullRequest(row: PullRequestRow): GitHubPullRequest {
   };
 }
 
-let activeRefresh: Promise<PullRequestScanResult> | null = null;
-
 export async function listCachedPullRequests(): Promise<GitHubPullRequest[]> {
   const database = await getDatabase();
   const rows = await database.select<PullRequestRow[]>(`
@@ -57,16 +57,45 @@ export async function listCachedPullRequests(): Promise<GitHubPullRequest[]> {
   return rows.map(toPullRequest);
 }
 
-export function refreshPullRequestsFromSessions(): Promise<PullRequestScanResult> {
-  activeRefresh ??= performPullRequestRefresh().finally(() => {
-    activeRefresh = null;
-  });
-  return activeRefresh;
+export async function refreshPullRequestsFromSessions(options: { force?: boolean } = {}): Promise<PullRequestScanResult> {
+  return (await refreshPullRequestsWithScope(options)).result;
 }
 
-async function performPullRequestRefresh(): Promise<PullRequestScanResult> {
+export async function refreshPullRequestsWithScope(options: { force?: boolean } = {}) {
   const sessions = await listAiSessions();
   const cwds = sessions.map((session) => session.cwd).filter((cwd): cwd is string => Boolean(cwd));
+  const scope = normalizeSourceScope("github", stableScopeKey(cwds));
+  const result = await runScopedSourceRefresh({
+    source: "github",
+    scopeKey: scope.scopeKey,
+    ttlMs: sourceDefinitions.github.ttlMs,
+    force: options.force,
+    refresh: async () => {
+      const data = await performPullRequestRefresh(cwds);
+      const partial = data.repositoriesSucceeded < data.repositoriesScanned;
+      return {
+        data,
+        itemCount: data.pullRequests.length,
+        status: partial ? "partial" as const : "fresh" as const,
+        errorCategory: partial ? "partial-scan" : null,
+        errorSummary: partial ? data.warnings.join(" ").slice(0, 240) : null,
+      };
+    },
+  });
+  if (result.data) return { result: result.data, scopeKey: scope.scopeKey };
+  const cached = await listCachedPullRequests();
+  return {
+    result: {
+      pullRequests: cached.map(({ discoveredAt: _, ...pullRequest }) => pullRequest),
+      repositoriesScanned: new Set(cached.map((pullRequest) => pullRequest.repository)).size,
+      repositoriesSucceeded: new Set(cached.map((pullRequest) => pullRequest.repository)).size,
+      warnings: [],
+    },
+    scopeKey: scope.scopeKey,
+  };
+}
+
+async function performPullRequestRefresh(cwds: string[]): Promise<PullRequestScanResult> {
   const result = await invoke<PullRequestScanResult>("scan_session_pull_requests", { cwds });
 
   if (result.repositoriesScanned > 0 && result.repositoriesSucceeded === 0 && result.pullRequests.length === 0) {
@@ -75,14 +104,24 @@ async function performPullRequestRefresh(): Promise<PullRequestScanResult> {
 
   const database = await getDatabase();
   const discoveredAt = new Date().toISOString();
-  await database.execute("DELETE FROM github_pull_requests");
+  const currentPullRequests = await database.select<Array<{ repository: string; number: number }>>(
+    "SELECT repository, number FROM github_pull_requests",
+  );
+  const nextPullRequests = new Set(result.pullRequests.map((item) => `${item.repository}\u001f${item.number}`));
   for (const pullRequest of result.pullRequests) {
     await database.execute(
       `INSERT INTO github_pull_requests (
         repository, number, repo_path, title, url, head_ref_name, base_ref_name,
         is_draft, updated_at, author_login, session_match_count, authored_by_viewer,
         review_requested, discovered_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+      ON CONFLICT(repository, number) DO UPDATE SET
+        repo_path = excluded.repo_path, title = excluded.title, url = excluded.url,
+        head_ref_name = excluded.head_ref_name, base_ref_name = excluded.base_ref_name,
+        is_draft = excluded.is_draft, updated_at = excluded.updated_at,
+        author_login = excluded.author_login, session_match_count = excluded.session_match_count,
+        authored_by_viewer = excluded.authored_by_viewer,
+        review_requested = excluded.review_requested, discovered_at = excluded.discovered_at`,
       [
         pullRequest.repository,
         pullRequest.number,
@@ -100,6 +139,16 @@ async function performPullRequestRefresh(): Promise<PullRequestScanResult> {
         discoveredAt,
       ],
     );
+  }
+  if (result.repositoriesSucceeded === result.repositoriesScanned) {
+    for (const current of currentPullRequests) {
+      if (!nextPullRequests.has(`${current.repository}\u001f${current.number}`)) {
+        await database.execute(
+          "DELETE FROM github_pull_requests WHERE repository = $1 AND number = $2",
+          [current.repository, current.number],
+        );
+      }
+    }
   }
   return result;
 }

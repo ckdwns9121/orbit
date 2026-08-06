@@ -1,7 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { ConfluencePage, ConfluenceSearchResult } from "../domain/confluence-page";
+import type { SourceSyncState } from "../domain/work-continuity";
+import { normalizeSourceScope, sourceDefinitions } from "../sources/source-capability";
 import { getDatabase } from "./database";
+import { queryCacheProvenance, type QueryCacheResult } from "./query-cache-provenance";
 import { getAppSettings } from "./settings-repository";
+import { getSourceSyncState, runScopedSourceRefresh, safeSyncErrorSummary, type ScopedRefreshResult } from "./source-sync-repository";
 
 interface ConfluencePageRow {
   id: string;
@@ -48,29 +52,78 @@ async function listCachedSearch(queryKey: string): Promise<{ searchedAt: string;
   return { searchedAt: searches[0].searched_at, pages: rows.map(toPage) };
 }
 
-export async function searchConfluencePages(cql: string): Promise<ConfluencePage[]> {
-  const queryKey = normalizeCql(cql);
-  if (!queryKey) return [];
-  const cached = await listCachedSearch(queryKey);
-  if (cached && Date.now() - new Date(cached.searchedAt).getTime() < 10 * 60 * 1_000) return cached.pages;
+export interface ConfluenceSearchDependencies {
+  loadCache: typeof listCachedSearch;
+  refresh: (cql: string, queryKey: string, scopeKey: string, force?: boolean) => Promise<ScopedRefreshResult<ConfluencePage[]>>;
+  readSyncState: (scopeKey: string) => Promise<SourceSyncState | null>;
+}
 
+const defaultConfluenceSearchDependencies: ConfluenceSearchDependencies = {
+  loadCache: listCachedSearch,
+  refresh: (cql, queryKey, scopeKey, force) => runScopedSourceRefresh({
+    source: "confluence",
+    scopeKey,
+    ttlMs: sourceDefinitions.confluence.ttlMs,
+    force,
+    refresh: async () => {
+      const pages = await performConfluenceSearch(cql, queryKey);
+      return { data: pages, itemCount: pages.length };
+    },
+  }),
+  readSyncState: (scopeKey) => getSourceSyncState("confluence", scopeKey),
+};
+
+export async function searchConfluencePagesWithProvenance(
+  cql: string,
+  options: { force?: boolean } = {},
+  dependencies: ConfluenceSearchDependencies = defaultConfluenceSearchDependencies,
+): Promise<QueryCacheResult<ConfluencePage>> {
+  const queryKey = normalizeCql(cql);
+  if (!queryKey) return { items: [], provenance: queryCacheProvenance(null, "remote") };
+  const scope = normalizeSourceScope("confluence", queryKey);
+  const cached = await dependencies.loadCache(queryKey);
+  try {
+    const result = await dependencies.refresh(cql, queryKey, scope.scopeKey, options.force);
+    if (result.data) {
+      return { items: result.data, provenance: queryCacheProvenance(result.state, "remote") };
+    }
+    const cache = await dependencies.loadCache(queryKey);
+    return {
+      items: cache?.pages ?? [],
+      provenance: queryCacheProvenance(result.state, "cache", cache?.searchedAt ?? cached?.searchedAt ?? null),
+    };
+  } catch (cause) {
+    if (cached?.pages.length) {
+      const failedState = await dependencies.readSyncState(scope.scopeKey).catch(() => null);
+      return {
+        items: cached.pages,
+        provenance: queryCacheProvenance(
+          failedState,
+          "cache",
+          cached.searchedAt,
+          safeSyncErrorSummary(cause),
+        ),
+      };
+    }
+    throw cause;
+  }
+}
+
+export async function searchConfluencePages(cql: string, options: { force?: boolean } = {}): Promise<ConfluencePage[]> {
+  return (await searchConfluencePagesWithProvenance(cql, options)).items;
+}
+
+async function performConfluenceSearch(cql: string, queryKey: string): Promise<ConfluencePage[]> {
   const settings = await getAppSettings();
   if (!settings.jira_url || !settings.jira_email) {
-    if (cached?.pages.length) return cached.pages;
     throw new Error("Settings에서 Atlassian 사이트 URL과 이메일을 입력해주세요.");
   }
 
-  let result: ConfluenceSearchResult;
-  try {
-    result = await invoke<ConfluenceSearchResult>("search_confluence_pages", {
-      jiraUrl: settings.jira_url,
-      jiraEmail: settings.jira_email,
-      cql,
-    });
-  } catch (cause) {
-    if (cached?.pages.length) return cached.pages;
-    throw cause;
-  }
+  const result = await invoke<ConfluenceSearchResult>("search_confluence_pages", {
+    jiraUrl: settings.jira_url,
+    jiraEmail: settings.jira_email,
+    cql,
+  });
 
   const database = await getDatabase();
   const discoveredAt = new Date().toISOString();
@@ -79,7 +132,11 @@ export async function searchConfluencePages(cql: string): Promise<ConfluencePage
      ON CONFLICT(query_key) DO UPDATE SET cql = excluded.cql, searched_at = excluded.searched_at`,
     [queryKey, result.cql, discoveredAt],
   );
-  await database.execute("DELETE FROM confluence_search_results WHERE query_key = $1", [queryKey]);
+  const currentResults = await database.select<Array<{ page_id: string }>>(
+    "SELECT page_id FROM confluence_search_results WHERE query_key = $1",
+    [queryKey],
+  );
+  const nextPageIds = new Set(result.pages.map((page) => page.id));
   for (const page of result.pages) {
     await database.execute(
       `INSERT INTO confluence_pages (
@@ -94,6 +151,15 @@ export async function searchConfluencePages(cql: string): Promise<ConfluencePage
       "INSERT OR IGNORE INTO confluence_search_results (query_key, page_id) VALUES ($1, $2)",
       [queryKey, page.id],
     );
+  }
+  // Reconcile only after every new record/link has been safely upserted.
+  for (const current of currentResults) {
+    if (!nextPageIds.has(current.page_id)) {
+      await database.execute(
+        "DELETE FROM confluence_search_results WHERE query_key = $1 AND page_id = $2",
+        [queryKey, current.page_id],
+      );
+    }
   }
   return result.pages.map((page) => ({ ...page, discoveredAt }));
 }

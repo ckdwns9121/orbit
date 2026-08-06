@@ -1,7 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { AssignedJiraIssuesResult, JiraIssue, JiraTaskLink } from "../domain/jira-issue";
+import { sourceDefinitions } from "../sources/source-capability";
 import { getAppSettings } from "./settings-repository";
 import { getDatabase } from "./database";
+import { runScopedSourceRefresh } from "./source-sync-repository";
 
 interface JiraIssueRow {
   issue_key: string;
@@ -33,8 +35,6 @@ function toIssue(row: JiraIssueRow): JiraIssue {
   };
 }
 
-let activeRefresh: Promise<AssignedJiraIssuesResult> | null = null;
-
 export async function listCachedJiraIssues(): Promise<JiraIssue[]> {
   const database = await getDatabase();
   const rows = await database.select<JiraIssueRow[]>(`
@@ -45,9 +45,26 @@ export async function listCachedJiraIssues(): Promise<JiraIssue[]> {
   return rows.map(toIssue);
 }
 
-export function refreshAssignedJiraIssues(): Promise<AssignedJiraIssuesResult> {
-  activeRefresh ??= performRefresh().finally(() => { activeRefresh = null; });
-  return activeRefresh;
+export async function refreshAssignedJiraIssues(options: { force?: boolean } = {}): Promise<AssignedJiraIssuesResult> {
+  const result = await runScopedSourceRefresh({
+    source: "jira",
+    scopeKey: "global",
+    ttlMs: sourceDefinitions.jira.ttlMs,
+    force: options.force,
+    refresh: async () => {
+      const data = await performRefresh();
+      return {
+        data,
+        itemCount: data.issues.length,
+        status: data.truncated ? "partial" as const : "fresh" as const,
+        errorCategory: data.truncated ? "result-truncated" : null,
+        errorSummary: data.truncated ? "Jira 결과가 500개로 제한되어 기존 캐시를 보존했습니다." : null,
+      };
+    },
+  });
+  if (result.data) return result.data;
+  const issues = await listCachedJiraIssues();
+  return { issues, truncated: false };
 }
 
 async function performRefresh(): Promise<AssignedJiraIssuesResult> {
@@ -61,18 +78,32 @@ async function performRefresh(): Promise<AssignedJiraIssuesResult> {
   });
   const database = await getDatabase();
   const discoveredAt = new Date().toISOString();
-  await database.execute("DELETE FROM jira_issues");
+  const currentIssues = await database.select<Array<{ issue_key: string }>>("SELECT issue_key FROM jira_issues");
+  const nextIssueKeys = new Set(result.issues.map((issue) => issue.key));
   for (const issue of result.issues) {
     await database.execute(
       `INSERT INTO jira_issues (
         issue_key, summary, status, status_category, priority, project_key,
         project_name, due_date, updated_at, url, discovered_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      ON CONFLICT(issue_key) DO UPDATE SET
+        summary = excluded.summary, status = excluded.status,
+        status_category = excluded.status_category, priority = excluded.priority,
+        project_key = excluded.project_key, project_name = excluded.project_name,
+        due_date = excluded.due_date, updated_at = excluded.updated_at,
+        url = excluded.url, discovered_at = excluded.discovered_at`,
       [
         issue.key, issue.summary, issue.status, issue.statusCategory, issue.priority,
         issue.projectKey, issue.projectName, issue.dueDate, issue.updatedAt, issue.url, discoveredAt,
       ],
     );
+  }
+  if (!result.truncated) {
+    for (const current of currentIssues) {
+      if (!nextIssueKeys.has(current.issue_key)) {
+        await database.execute("DELETE FROM jira_issues WHERE issue_key = $1", [current.issue_key]);
+      }
+    }
   }
   return result;
 }

@@ -24,6 +24,12 @@ export interface WorkItem {
   checkpoint: string | null;
   nextAction: string | null;
   doneDefinition: string | null;
+  blockedReason: string | null;
+  resumeCondition: string | null;
+  pausedAt: string | null;
+  lastFocusedAt: string | null;
+  nextReviewAt: string | null;
+  revision: number;
   targetAt: string | null;
   reminderSentAt: string | null;
   position: number;

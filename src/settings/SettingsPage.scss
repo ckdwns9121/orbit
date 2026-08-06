@@ -4,7 +4,7 @@
 .settings-page { min-height: calc(100vh - 70px); display: grid; grid-template-columns: 210px minmax(0, 1fr); background: var(--canvas); }
 .settings-nav { align-content: start; gap: 3px; padding: 25px 16px; background: var(--sidebar); border-right: 1px solid var(--border); }
 .settings-nav-heading { padding: 0 10px 12px; color: var(--text-faint); font-size: 10px; font-weight: 700; letter-spacing: .08em; }
-.settings-nav button { display: grid; grid-template-columns: 26px 1fr; align-items: center; min-height: 38px; padding: 0 10px; border: 0; background: transparent; text-align: left; font-size: 12px; }
+.settings-nav button { display: grid; grid-template-columns: 26px 1fr; align-items: center; min-height: 38px; padding: 0 10px; border: 0; background: transparent; text-align: left; font-size: 11px; }
 .settings-nav button > span { display: grid; place-items: center; width: 19px; height: 19px; color: var(--text-muted); border: 1px solid var(--border-strong); border-radius: 4px; }
 .settings-nav button:hover { background: var(--hover); }
 .settings-nav button.active { color: var(--accent); background: var(--accent-soft); font-weight: 650; }
@@ -14,11 +14,11 @@
 .settings-error small { display: block; margin-top: 4px; opacity: .8; }
 .settings-section > header { margin-bottom: 23px; }
 .settings-section > header span { color: var(--accent); font-size: 9px; font-weight: 800; letter-spacing: .1em; }
-.settings-section > header h2 { margin: 7px 0 0; font-size: 23px; letter-spacing: -.6px; }
-.settings-section > header p { max-width: 620px; margin: 8px 0 0; color: var(--text-muted); font-size: 12px; line-height: 1.55; }
+.settings-section > header h2 { margin: 7px 0 0; font-size: 21px; letter-spacing: -.6px; }
+.settings-section > header p { max-width: 620px; margin: 8px 0 0; color: var(--text-muted); font-size: 11px; line-height: 1.55; }
 .settings-card, .provider-form { padding: 22px; background: var(--surface); border: 1px solid var(--border); border-radius: $radius-medium; }
 .settings-card-title { display: flex; flex-direction: column; gap: 5px; }
-.settings-card-title strong { font-size: 13px; }
+.settings-card-title strong { font-size: 12px; }
 .settings-card-title span { color: var(--text-muted); font-size: 10px; }
 .theme-options { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 17px; }
 .theme-options > button { display: grid; grid-template-columns: 1fr auto; height: auto; padding: 9px; background: var(--surface); border: 1px solid var(--border); text-align: left; }

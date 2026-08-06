@@ -16,7 +16,6 @@ import {
 import { getAppSettings } from "./settings-repository";
 import { searchSlackMessages } from "./slack-message-repository";
 import { createSlackMessageLink, createWorkItemLink } from "./work-item-link-repository";
-import { moveWorkItem } from "./work-item-repository";
 
 export interface DiscoveryProgress {
   percent: number;
@@ -169,7 +168,6 @@ export async function connectTaskContext(taskId: string, candidates: ContextCand
       });
     }
   }
-  if (sessions.length > 0) await moveWorkItem(taskId, "ai_running");
 }
 
 export async function autoConnectTaskAiSessions(

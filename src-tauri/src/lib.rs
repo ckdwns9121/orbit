@@ -15,6 +15,7 @@ mod context_discovery;
 mod github_pull_requests;
 mod google_calendar;
 mod jira_issue;
+mod jira_transition;
 mod local_ai_sessions;
 mod openai_chat;
 mod slack;
@@ -319,6 +320,42 @@ pub fn run() {
             sql: include_str!("../migrations/0020_add_work_item_target_time.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 21,
+            description: "create_work_continuity_foundation",
+            sql: include_str!("../migrations/0021_work_continuity_foundation.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 22,
+            description: "create_inbox_and_external_actions",
+            sql: include_str!("../migrations/0022_inbox_and_external_actions.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 23,
+            description: "create_reviews_templates_automation",
+            sql: include_str!("../migrations/0023_reviews_templates_automation.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 24,
+            description: "repair_continuity_focus_protocol",
+            sql: include_str!("../migrations/0024_repair_continuity_focus_protocol.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 25,
+            description: "repair_completion_revision_protocol",
+            sql: include_str!("../migrations/0025_repair_completion_revision_protocol.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 26,
+            description: "execute_automation_actions_safely",
+            sql: include_str!("../migrations/0026_automation_execution.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()
@@ -381,6 +418,9 @@ pub fn run() {
             github_pull_requests::scan_session_pull_requests,
             jira_issue::fetch_jira_issue_development,
             jira_issue::fetch_assigned_jira_issues,
+            jira_transition::preview_jira_status_transition,
+            jira_transition::execute_approved_jira_status_transition,
+            jira_transition::reconcile_jira_status_transition,
             google_calendar::connect_google_calendar,
             google_calendar::sync_google_calendar,
             google_calendar::disconnect_google_calendar,

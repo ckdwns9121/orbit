@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { listWorkItems, moveWorkItem } from "../data/work-item-repository";
+import { listWorkItems } from "../data/work-item-repository";
+import { getFocusSlot, switchFocusedWorkItem } from "../data/work-continuity-repository";
 import type { WorkItem } from "../domain/work-item";
 import { notifyDueWorkItems } from "../notifications/task-reminders";
 import "./TrayApp.scss";
@@ -61,8 +62,10 @@ export default function TrayApp() {
   const aiCount = items.filter((item) => item.status === "ai_running").length;
 
   async function complete(item: WorkItem) {
-    await moveWorkItem(item.id, "done");
-    await refresh();
+    // Completion requires the result/evidence sheet in the main window. The
+    // tray must never bypass that approval boundary.
+    void item;
+    await invoke("show_main_window");
   }
 
   async function start(item: WorkItem) {
@@ -71,7 +74,14 @@ export default function TrayApp() {
       return;
     }
 
-    await moveWorkItem(item.id, "focus");
+    const slot = await getFocusSlot();
+    await switchFocusedWorkItem({
+      currentWorkItemId: null,
+      requestedWorkItemId: item.id,
+      expectedSlotRevision: slot.revision,
+      expectedCurrentRevision: null,
+      expectedRequestedRevision: item.revision,
+    });
     await refresh();
   }
 
@@ -100,7 +110,7 @@ export default function TrayApp() {
               </div>
             )}
             <div className="tray-focus-actions">
-              <button className="tray-primary" type="button" onClick={() => complete(focusItem)}>완료</button>
+              <button className="tray-primary" type="button" onClick={() => complete(focusItem)}>앱에서 완료</button>
               <button type="button" onClick={() => invoke("show_main_window")}>전환·기록</button>
             </div>
           </>

@@ -1,151 +1,246 @@
 import { useEffect, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
-  Activity,
   AlertTriangle,
-  Bot,
+  ArrowRight,
+  CalendarDays,
   CheckCircle2,
   Clock3,
-  Database,
-  Eye,
-  GitCommitHorizontal,
   GitPullRequest,
-  TicketCheck,
+  History,
+  MapPin,
+  RotateCcw,
+  UserCheck,
 } from "lucide-react";
+import type { CalendarEvent } from "../domain/calendar-event";
+import type { GitHubPullRequest } from "../domain/github-pull-request";
+import { statusMeta, type WorkItem } from "../domain/work-item";
 import {
   loadDashboardSnapshot,
-  type DashboardPeriod,
   type DashboardSnapshot,
-  type DashboardWin,
 } from "../data/dashboard-repository";
+import { buildContinuityDashboard, formatRelativeTime } from "../continuity/presenters";
 import "./DashboardPage.scss";
 
-const dateTime = new Intl.DateTimeFormat("ko-KR", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+const dayLabel = new Intl.DateTimeFormat("ko-KR", { month: "long", day: "numeric", weekday: "short" });
+const eventTime = new Intl.DateTimeFormat("ko-KR", { hour: "2-digit", minute: "2-digit" });
 
-export default function DashboardPage() {
-  const [period, setPeriod] = useState<DashboardPeriod>(7);
+export default function DashboardPage({
+  workItems,
+  onResume,
+  onOpenContext,
+  onOpenContinuity,
+}: {
+  workItems: WorkItem[];
+  onResume: (item: WorkItem) => void;
+  onOpenContext: (item: WorkItem) => void;
+  onOpenContinuity: () => void;
+}) {
   const [snapshot, setSnapshot] = useState<DashboardSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
     setError(null);
-    void loadDashboardSnapshot(period)
+    void loadDashboardSnapshot()
       .then((next) => active && setSnapshot(next))
       .catch((cause) => active && setError(String(cause)));
     return () => { active = false; };
-  }, [period]);
+  }, []);
 
   if (error) return <div className="dashboard-error">대시보드를 불러오지 못했습니다. {error}</div>;
-  if (!snapshot) return <div className="dashboard-loading">업무 성과를 집계하는 중…</div>;
-
-  const totalOutput = snapshot.completedTasks + snapshot.completedJira + snapshot.commits;
-  const maxActivity = Math.max(1, ...snapshot.dailyActivity.map((day) => day.total));
+  if (!snapshot) return <div className="dashboard-loading">오늘의 업무를 불러오는 중…</div>;
+  const continuity = buildContinuityDashboard(workItems);
 
   return (
     <main className="dashboard-page">
       <header className="dashboard-heading">
-        <div>
-          <span className="dashboard-eyebrow">PERFORMANCE</span>
-          <h2>{period === 7 ? "이번 주" : "최근 30일"} 성과</h2>
-          <p>연결된 업무 기록에서 <strong>{totalOutput}건의 산출 활동</strong>을 확인했어요.</p>
-        </div>
-        <div className="dashboard-period" role="group" aria-label="성과 집계 기간">
-          <button className={period === 7 ? "active" : ""} type="button" onClick={() => setPeriod(7)}>7일</button>
-          <button className={period === 30 ? "active" : ""} type="button" onClick={() => setPeriod(30)}>30일</button>
-        </div>
+        <span className="dashboard-eyebrow">TODAY</span>
+        <h2>오늘의 업무</h2>
+        <p>{dayLabel.format(new Date())} · 먼저 확인해야 할 작업과 리뷰를 모았어요.</p>
       </header>
 
-      <section className="dashboard-kpis" aria-label="핵심 성과 지표">
-        <Kpi icon={CheckCircle2} tone="success" label="완료한 Task" value={snapshot.completedTasks} detail={`전체 누적 ${snapshot.totalCompletedTasks}개`} />
-        <Kpi icon={TicketCheck} tone="info" label="완료 상태 Jira" value={snapshot.completedJira} detail={`현재 완료 상태 ${snapshot.totalCompletedJira}개`} />
-        <Kpi icon={GitCommitHorizontal} tone="violet" label="발견된 커밋" value={snapshot.commits} detail={`연결 기록 누적 ${snapshot.totalCommits}개`} />
-        <Kpi icon={GitPullRequest} tone="neutral" label="내가 올린 열린 PR" value={snapshot.openPullRequests} detail={`리뷰 대기 ${snapshot.reviewRequests}개`} />
+      <section className="dashboard-continuity" aria-label="작업 이어가기">
+        <article className="dashboard-resume-card">
+          <header><div><RotateCcw size={15} /><strong>이어서 시작</strong></div><span>{continuity.resume ? formatRelativeTime(continuity.resume.pausedAt || continuity.resume.lastFocusedAt || continuity.resume.updatedAt) : "추천"}</span></header>
+          {continuity.resume ? (
+            <div className="dashboard-resume-body">
+              <div>
+                <h3>{continuity.resume.title}</h3>
+                <p>{continuity.resume.checkpoint || "마지막 체크포인트가 없습니다."}</p>
+                <small><ArrowRight size={12} /> {continuity.resume.nextAction || "재개 후 첫 행동을 정해보세요."}</small>
+              </div>
+              <div className="dashboard-resume-actions">
+                <button type="button" onClick={() => onOpenContext(continuity.resume!)}>근거 보기</button>
+                <button className="primary-button" type="button" onClick={() => onResume(continuity.resume!)}>재개</button>
+              </div>
+            </div>
+          ) : (
+            <div className="dashboard-continuity-empty">멈춰 둔 작업이 없습니다. 오늘 작업에서 다음 실행 항목을 선택해보세요.</div>
+          )}
+        </article>
+
+        <article className="dashboard-continuity-queue">
+          <header><div><AlertTriangle size={15} /><strong>막힌 작업 재점검</strong></div><span>{continuity.blocked.length}개</span></header>
+          {continuity.blocked.slice(0, 2).map((item) => (
+            <button type="button" key={item.id} onClick={() => onOpenContext(item)}>
+              <span><strong>{item.title}</strong><small>{item.blockedReason || "막힌 이유가 기록되지 않았습니다."}</small></span>
+              <ArrowRight size={13} />
+            </button>
+          ))}
+          {!continuity.blocked.length && <div className="dashboard-queue-empty">지금 재점검할 막힌 작업이 없습니다.</div>}
+        </article>
+
+        <article className="dashboard-continuity-queue">
+          <header><div><History size={15} /><strong>방치 작업</strong></div><span>{continuity.forgotten.length}개</span></header>
+          {continuity.forgotten.slice(0, 2).map((item) => (
+            <button type="button" key={item.id} onClick={() => onOpenContext(item)}>
+              <span><strong>{item.title}</strong><small>{formatRelativeTime(item.updatedAt)} 이후 진전 없음</small></span>
+              <ArrowRight size={13} />
+            </button>
+          ))}
+          {!continuity.forgotten.length && <div className="dashboard-queue-empty">7일 이상 멈춘 작업이 없습니다.</div>}
+        </article>
+        <button className="dashboard-continuity-more" type="button" onClick={onOpenContinuity}>전체 업무 흐름 보기 <ArrowRight size={13} /></button>
       </section>
 
-      <section className="dashboard-layout">
-        <article className="dashboard-panel dashboard-trend">
-          <PanelHeading icon={Activity} title="산출 추세" meta={`Task · Jira · commit / ${period}일`} />
-          <div className="dashboard-chart-legend" aria-hidden="true"><span className="task">Task</span><span className="jira">Jira</span><span className="commit">Commit</span></div>
-          <div className={`dashboard-bars period-${period}`} role="img" aria-label={`${period}일 동안 Task 완료, Jira 완료 상태 변경, 커밋 활동을 날짜별로 표시한 차트`}>
-            {snapshot.dailyActivity.map((day, index) => (
-              <div className="dashboard-bar-column" key={day.date} title={`${day.label}: Task ${day.tasks}, Jira ${day.jira}, commit ${day.commits}`}>
-                <div className="dashboard-bar-track">
-                  <div className="dashboard-bar-stack" style={{ height: `${Math.max(day.total ? 8 : 0, (day.total / maxActivity) * 100)}%` }}>
-                    {day.commits > 0 && <i className="commit" style={{ flex: day.commits }} />}
-                    {day.jira > 0 && <i className="jira" style={{ flex: day.jira }} />}
-                    {day.tasks > 0 && <i className="task" style={{ flex: day.tasks }} />}
-                  </div>
-                </div>
-                {(period === 7 || index % 5 === 0 || index === snapshot.dailyActivity.length - 1) && <span>{day.label}</span>}
-              </div>
-            ))}
-          </div>
-        </article>
+      <section className="dashboard-work-grid" aria-label="오늘의 업무 현황">
+        <TaskPanel
+          icon={Clock3}
+          title="오늘 작업"
+          meta={`${snapshot.todayTasks.length}개`}
+          tasks={snapshot.todayTasks}
+          empty="오늘 예정된 작업이 없습니다."
+        />
+        <TaskPanel
+          icon={CheckCircle2}
+          title="어제 한 작업"
+          meta={`${snapshot.yesterdayTasks.length}개 완료`}
+          tasks={snapshot.yesterdayTasks}
+          empty="어제 완료한 작업이 없습니다."
+          completed
+        />
+        <PullRequestPanel
+          icon={GitPullRequest}
+          title="열린 PR"
+          meta={`${snapshot.openPullRequests.length}개`}
+          pullRequests={snapshot.openPullRequests}
+          empty="내가 올린 열린 PR이 없습니다."
+        />
+        <PullRequestPanel
+          icon={UserCheck}
+          title="내 리뷰 대기 PR"
+          meta={`${snapshot.reviewRequests.length}개`}
+          pullRequests={snapshot.reviewRequests}
+          empty="내 리뷰를 기다리는 PR이 없습니다."
+          review
+        />
+      </section>
 
-        <article className="dashboard-panel dashboard-health">
-          <PanelHeading icon={Bot} title="업무 건강도" meta={`${snapshot.currentTasks.length}개 진행 중`} />
-          <div className="dashboard-health-list">
-            {snapshot.workHealth.map((item) => (
-              <div className={`health-${item.status}`} key={item.status}>
-                <div><span>{item.label}</span><strong>{item.count}</strong></div>
-                <progress max={Math.max(1, snapshot.currentTasks.length)} value={item.count}>{item.count}</progress>
-              </div>
-            ))}
+      <section className="dashboard-schedule" aria-label="오늘 일정">
+        <PanelHeading icon={CalendarDays} title="오늘 일정" meta={`${snapshot.todayEvents.length}개`} />
+        {snapshot.todayEvents.length ? (
+          <div className="dashboard-event-list">
+            {snapshot.todayEvents.map((event) => <EventRow event={event} key={event.id} />)}
           </div>
-          <div className="dashboard-attention">
-            <span><Eye size={15} /> 리뷰 요청 PR <strong>{snapshot.reviewRequests}</strong></span>
-            <span><AlertTriangle size={15} /> 막힌 Task <strong>{snapshot.workHealth.find((item) => item.status === "blocked")?.count || 0}</strong></span>
-            <span><Clock3 size={15} /> 오늘 일정 <strong>{snapshot.todayEvents.length}</strong></span>
-          </div>
-        </article>
-
-        <article className="dashboard-panel dashboard-wins">
-          <PanelHeading icon={CheckCircle2} title="최근 성과" meta="가장 최근 기록부터" />
-          <div className="dashboard-win-list">
-            {snapshot.recentWins.length ? snapshot.recentWins.map((win) => <Win key={win.id} win={win} />) : <Empty text="선택한 기간에 기록된 성과가 없습니다." />}
-          </div>
-        </article>
-
-        <aside className="dashboard-side-stack">
-          <article className="dashboard-panel dashboard-projects">
-            <PanelHeading icon={TicketCheck} title="프로젝트별 완료" meta="Jira 기준" />
-            {snapshot.projectBreakdown.length ? <ProjectBars items={snapshot.projectBreakdown} /> : <Empty text="기간 내 완료 상태 Jira가 없습니다." />}
-          </article>
-          <article className="dashboard-panel dashboard-scope">
-            <PanelHeading icon={Database} title="집계 범위" meta="데이터 정확도" />
-            <ul>
-              <li><strong>Task</strong><span>실제 완료 시각 기준</span></li>
-              <li><strong>Jira</strong><span>완료 상태의 최근 변경 시각 기준</span></li>
-              <li><strong>Commit</strong><span>Jira 개발 정보에서 발견된 기록</span></li>
-              <li><strong>PR</strong><span>현재 GitHub에 열린 내 PR</span></li>
-            </ul>
-          </article>
-        </aside>
+        ) : <Empty text="오늘 등록된 일정이 없습니다." />}
       </section>
     </main>
   );
 }
 
-function Kpi({ icon: Icon, tone, label, value, detail }: { icon: typeof CheckCircle2; tone: string; label: string; value: number; detail: string }) {
-  return <article className={`dashboard-kpi tone-${tone}`}><div className="dashboard-kpi-icon"><Icon size={19} strokeWidth={1.8} /></div><div><span>{label}</span><strong>{value}<small>건</small></strong><p>{detail}</p></div></article>;
+function TaskPanel({
+  icon: Icon,
+  title,
+  meta,
+  tasks,
+  empty,
+  completed = false,
+}: {
+  icon: typeof Clock3;
+  title: string;
+  meta: string;
+  tasks: WorkItem[];
+  empty: string;
+  completed?: boolean;
+}) {
+  return (
+    <article className="dashboard-panel dashboard-task-panel">
+      <PanelHeading icon={Icon} title={title} meta={meta} />
+      {tasks.length ? (
+        <div className="dashboard-list">
+          {tasks.slice(0, 3).map((task) => (
+            <div className="dashboard-task-row" key={task.id}>
+              <span className={`dashboard-task-check ${completed ? "is-complete" : ""}`}>
+                {completed && <CheckCircle2 size={14} />}
+              </span>
+              <div>
+                <strong>{task.title}</strong>
+                <small>{task.nextAction || task.checkpoint || (completed ? "완료됨" : "다음 행동을 정해보세요")}</small>
+              </div>
+              <em>{completed ? "완료" : statusMeta[task.status].shortLabel}</em>
+            </div>
+          ))}
+        </div>
+      ) : <Empty text={empty} />}
+    </article>
+  );
 }
 
-function PanelHeading({ icon: Icon, title, meta }: { icon: typeof Activity; title: string; meta: string }) {
-  return <header className="dashboard-panel-heading"><div><Icon size={17} strokeWidth={1.8} /><h3>{title}</h3></div><span>{meta}</span></header>;
+function PullRequestPanel({
+  icon: Icon,
+  title,
+  meta,
+  pullRequests,
+  empty,
+  review = false,
+}: {
+  icon: typeof GitPullRequest;
+  title: string;
+  meta: string;
+  pullRequests: GitHubPullRequest[];
+  empty: string;
+  review?: boolean;
+}) {
+  return (
+    <article className="dashboard-panel dashboard-pr-panel">
+      <PanelHeading icon={Icon} title={title} meta={meta} />
+      {pullRequests.length ? (
+        <div className="dashboard-list">
+          {pullRequests.slice(0, 3).map((pullRequest) => (
+            <button className="dashboard-pr-row" key={`${pullRequest.repository}:${pullRequest.number}`} type="button" onClick={() => void openUrl(pullRequest.url)}>
+              <span className="dashboard-pr-mark"><GitPullRequest size={14} /></span>
+              <div>
+                <strong>{pullRequest.title}</strong>
+                <small>{pullRequest.repository} · #{pullRequest.number}</small>
+              </div>
+              <em>{review ? "리뷰 필요" : pullRequest.isDraft ? "Draft" : "Open"}</em>
+            </button>
+          ))}
+        </div>
+      ) : <Empty text={empty} />}
+    </article>
+  );
 }
 
-function Win({ win }: { win: DashboardWin }) {
-  const Icon = win.kind === "task" ? CheckCircle2 : win.kind === "jira" ? TicketCheck : GitCommitHorizontal;
-  const content = <><span className={`dashboard-win-icon kind-${win.kind}`}><Icon size={16} /></span><div><strong>{win.title}</strong><small>{win.detail}</small></div><time>{dateTime.format(new Date(win.occurredAt))}</time></>;
-  return win.url
-    ? <button className="dashboard-win" type="button" onClick={() => void openUrl(win.url!)}>{content}</button>
-    : <div className="dashboard-win">{content}</div>;
+function EventRow({ event }: { event: CalendarEvent }) {
+  const content = (
+    <>
+      <time>{event.allDay ? "종일" : eventTime.format(new Date(event.startAt))}</time>
+      <div>
+        <strong>{event.title}</strong>
+        <small>{event.location ? <><MapPin size={11} /> {event.location}</> : event.source === "google" ? "Google Calendar" : "Orbit 일정"}</small>
+      </div>
+      <span>{event.allDay ? "하루 종일" : `${eventTime.format(new Date(event.endAt))}까지`}</span>
+    </>
+  );
+  return event.externalUrl
+    ? <button className="dashboard-event-row" type="button" onClick={() => void openUrl(event.externalUrl!)}>{content}</button>
+    : <div className="dashboard-event-row">{content}</div>;
 }
 
-function ProjectBars({ items }: { items: Array<{ label: string; count: number }> }) {
-  const max = Math.max(...items.map((item) => item.count), 1);
-  return <div className="dashboard-project-bars">{items.map((item) => <div key={item.label}><div><span>{item.label}</span><strong>{item.count}</strong></div><i><b style={{ width: `${(item.count / max) * 100}%` }} /></i></div>)}</div>;
+function PanelHeading({ icon: Icon, title, meta }: { icon: typeof CalendarDays; title: string; meta: string }) {
+  return <header className="dashboard-panel-heading"><div><Icon size={16} strokeWidth={1.8} /><h3>{title}</h3></div><span>{meta}</span></header>;
 }
 
 function Empty({ text }: { text: string }) { return <div className="dashboard-empty">{text}</div>; }

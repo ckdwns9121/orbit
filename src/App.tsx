@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type FormEvent } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
+  Activity,
   AlarmClock,
   Calendar,
   Check,
@@ -32,9 +33,7 @@ import {
   createWorkItem,
   deleteWorkItem,
   listWorkItems,
-  moveWorkItem,
   reorderWorkItems,
-  updateCheckpoint,
   updateWorkItemTargetAt,
   updateWorkItemTitle,
 } from "./data/work-item-repository";
@@ -66,9 +65,8 @@ import {
   type JiraIssueDevelopment,
 } from "./domain/jira-development";
 import type { WorkItemLink } from "./domain/work-item-link";
-import { taskStatusForSessions } from "./domain/task-flow";
+import { taskStatusSuggestionForSessions } from "./domain/task-flow";
 import { isTaskSortMode, reorderWorkItemIds, sortWorkItems, type TaskSortMode } from "./domain/work-item-sort";
-import { requiresCheckpoint, type WorkItemTransition } from "./domain/workflow";
 import CalendarPage from "./calendar/CalendarPage";
 import SettingsPage from "./settings/SettingsPage";
 import WorkspacePage from "./workspace/WorkspacePage";
@@ -84,8 +82,30 @@ import { DEFAULT_QUICK_PANEL_SHORTCUT, displayShortcut, matchesShortcutEvent, sh
 import { getRegisteredShortcuts, setShortcutActions, syncGlobalShortcuts } from "./shortcuts/global-shortcuts";
 import { requestTaskReminderPermission } from "./notifications/task-reminders";
 import TaskAiFix from "./tasks/TaskAiFix";
+import {
+  applyStatusSuggestion,
+  createStatusSuggestion,
+  getFocusSlot,
+  ignoreStatusSuggestion,
+  listPendingStatusSuggestions,
+  recordActivityEvent,
+  switchFocusedWorkItem,
+  transitionWorkItem,
+  updateWorkItemCheckpoint,
+} from "./data/work-continuity-repository";
+import type { StatusSuggestion } from "./domain/work-continuity";
+import { InterruptionDialog, type InterruptionValues } from "./continuity/ContinuityDialogs";
+import "./continuity/ContinuityDialogs.scss";
+import { completeWorkItem, type CompletionEvidence } from "./data/completion-repository";
+import { CompletionSheet } from "./continuity/ContinuityDialogs";
+import ContinuityPage, { type ContinuityTab } from "./continuity/ContinuityPage";
+import { listSourceSyncStates } from "./data/source-sync-repository";
+import type { SourceSyncState } from "./domain/work-continuity";
+import { saveSlackMessageToInbox } from "./data/inbox-repository";
+import { prepareEnabledCheckpointDraft, recordAutomationApproval } from "./data/automation-repository";
+import { recoverDurableJiraOutbox } from "./sources/jira-outbox-recovery";
 
-type PrimarySection = "dashboard" | "tasks" | "calendar" | "chat" | "sessions" | "jira" | "pull_requests" | "settings";
+type PrimarySection = "dashboard" | "tasks" | "continuity" | "calendar" | "chat" | "sessions" | "jira" | "pull_requests" | "settings";
 type TaskTab = "today" | "todo" | "ai_running" | "done";
 
 const taskTabs: Array<{ id: TaskTab; label: string }> = [
@@ -136,13 +156,21 @@ function formatWorkItemTargetAt(value: string) {
 }
 
 function App() {
+  const workspaceRef = useRef<HTMLElement | null>(null);
   const [items, setItems] = useState<WorkItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isComposerOpen, setIsComposerOpen] = useState(false);
   const [discoveryTask, setDiscoveryTask] = useState<{ id: string; title: string; description: string } | null>(null);
-  const [pendingTransition, setPendingTransition] = useState<WorkItemTransition | null>(null);
+  const [pendingTransition, setPendingTransition] = useState<{ targetId: string; targetStatus: WorkItemStatus; openContextAfter?: boolean; suggestionId?: string } | null>(null);
+  const [pendingCompletion, setPendingCompletion] = useState<WorkItem | null>(null);
+  const [statusSuggestions, setStatusSuggestions] = useState<StatusSuggestion[]>([]);
+  const [sourceSyncStates, setSourceSyncStates] = useState<SourceSyncState[]>([]);
+  const [completionEvidence, setCompletionEvidence] = useState<CompletionEvidence[]>([]);
+  const [interruptionEvidence, setInterruptionEvidence] = useState<Array<{ label: string; url?: string }>>([]);
+  const [interruptionDraft, setInterruptionDraft] = useState<{ checkpoint?: string; nextAction?: string }>({});
   const [activeSection, setActiveSection] = useState<PrimarySection>("dashboard");
+  const [continuityInitialTab, setContinuityInitialTab] = useState<ContinuityTab>("inbox");
   const [activeTaskTab, setActiveTaskTab] = useState<TaskTab>("todo");
   const [contextItem, setContextItem] = useState<WorkItem | null>(null);
   const [deleteItem, setDeleteItem] = useState<WorkItem | null>(null);
@@ -157,15 +185,36 @@ function App() {
     return isTaskSortMode(stored) ? stored : "manual";
   });
 
+  const groupedItems = useMemo(() => {
+    return Object.fromEntries(
+      workItemStatuses.map((status) => [
+        status,
+        items.filter((item) => item.status === status),
+      ]),
+    ) as Record<WorkItemStatus, WorkItem[]>;
+  }, [items]);
+
+  const focusItem = groupedItems.focus[0];
+  const nextItems = [...groupedItems.review, ...groupedItems.todo].slice(0, 5);
+  const quickPanelItems = items.filter((item) => item.status !== "done" && item.status !== "inbox").slice(0, 12);
+
+  useEffect(() => {
+    workspaceRef.current?.scrollTo({ top: 0, left: 0 });
+  }, [activeSection]);
+
   const refresh = useCallback(async () => {
     try {
       setError(null);
-      const [nextItems, nextProgress] = await Promise.all([
+      const [nextItems, nextProgress, nextSuggestions, nextSyncStates] = await Promise.all([
         listWorkItems(),
         listWorkItemSessionProgress(),
+        listPendingStatusSuggestions(),
+        listSourceSyncStates(),
       ]);
       setItems(nextItems);
       setSessionProgress(nextProgress);
+      setStatusSuggestions(nextSuggestions);
+      setSourceSyncStates(nextSyncStates);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -178,6 +227,14 @@ function App() {
   }, [refresh]);
 
   useEffect(() => {
+    void recoverDurableJiraOutbox()
+      .then(async (report) => {
+        if (report.reconciled > 0) await refresh();
+      })
+      .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
+  }, [refresh]);
+
+  useEffect(() => {
     setShortcutActions({
       openQuickPanel: () => setIsQuickPanelOpen(true),
       openChat: () => { setIsQuickPanelOpen(false); setActiveSection("chat"); },
@@ -186,6 +243,65 @@ function App() {
       .then((stored) => syncGlobalShortcuts(shortcutSettingsFromStored(stored)))
       .catch((cause) => setShortcutError(cause instanceof Error ? cause.message : String(cause)));
   }, []);
+
+  useEffect(() => {
+    if (!pendingCompletion) { setCompletionEvidence([]); return; }
+    let active = true;
+    void Promise.all([listWorkItemLinks(pendingCompletion.id), listAiSessions()]).then(([links, sessions]) => {
+      if (!active) return;
+      setCompletionEvidence([
+        ...links.map((link) => ({
+          source: link.kind,
+          sourceId: link.externalId || link.id,
+          label: link.label,
+          url: link.externalUrl,
+          excerpt: link.kind === "slack" ? link.label : null,
+        } satisfies CompletionEvidence)),
+        ...sessions.filter((session) => session.linkedWorkItemId === pendingCompletion.id).map((session) => ({
+          source: "ai" as const,
+          sourceId: `${session.provider}:${session.sessionId}`,
+          label: displaySessionTitle(session),
+          url: null,
+        })),
+      ]);
+    }).catch((cause) => active && setError(cause instanceof Error ? cause.message : String(cause)));
+    return () => { active = false; };
+  }, [pendingCompletion]);
+
+  useEffect(() => {
+    if (!pendingTransition || !focusItem) { setInterruptionEvidence([]); setInterruptionDraft({}); return; }
+    let active = true;
+    void Promise.all([listWorkItemLinks(focusItem.id), listAiSessions()]).then(([links, sessions]) => {
+      if (!active) return;
+      const linkedSessions = sessions.filter((session) => session.linkedWorkItemId === focusItem.id);
+      const evidence = [
+        ...linkedSessions.slice(0, 2).map((session) => ({ label: `AI · ${displaySessionTitle(session)}` })),
+        ...links.slice(0, 4).map((link) => ({ label: `${link.kind.toUpperCase()} · ${link.label}`, ...(link.externalUrl ? { url: link.externalUrl } : {}) })),
+      ];
+      setInterruptionEvidence(evidence);
+      const draft = {
+        checkpoint: focusItem.checkpoint || (evidence.length ? `${focusItem.title}의 연결 근거 ${evidence.length}개를 확인한 지점입니다.` : undefined),
+        nextAction: focusItem.nextAction || (evidence[0] ? `${evidence[0].label}부터 열어 남은 작업을 확인합니다.` : undefined),
+      };
+      setInterruptionDraft(draft);
+      if (draft.checkpoint && draft.nextAction) {
+        void prepareEnabledCheckpointDraft({
+          normalizedSourceIdentity: "checkpoint:evidence-draft",
+          workItemId: focusItem.id,
+          expectedRevision: focusItem.revision,
+          checkpoint: draft.checkpoint,
+          nextAction: draft.nextAction,
+          evidence: evidence.map((entry) => ({ source: "linked-context", ...entry })),
+        }).catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
+      }
+    }).catch(() => { if (active) { setInterruptionEvidence([]); setInterruptionDraft({}); } });
+    return () => { active = false; };
+  }, [pendingTransition, focusItem]);
+
+  useEffect(() => {
+    if (!contextItem) return;
+    void recordActivityEvent({ eventType: "context_opened", workItemId: contextItem.id, source: "app" });
+  }, [contextItem?.id]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -204,26 +320,43 @@ function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  const groupedItems = useMemo(() => {
-    return Object.fromEntries(
-      workItemStatuses.map((status) => [
-        status,
-        items.filter((item) => item.status === status),
-      ]),
-    ) as Record<WorkItemStatus, WorkItem[]>;
-  }, [items]);
-
-  const focusItem = groupedItems.focus[0];
-  const nextItems = [...groupedItems.review, ...groupedItems.todo].slice(0, 5);
-  const quickPanelItems = items.filter((item) => item.status !== "done" && item.status !== "inbox").slice(0, 12);
-
-  async function commitMove(id: string, status: WorkItemStatus) {
+  async function commitMove(id: string, status: WorkItemStatus): Promise<boolean> {
     try {
       setError(null);
-      await moveWorkItem(id, status);
+      const item = items.find((candidate) => candidate.id === id);
+      if (!item || item.status === status) return true;
+      if (status === "done") {
+        setPendingCompletion(item);
+        return false;
+      }
+      if (status === "focus") {
+        const slot = await getFocusSlot();
+        const current = slot.workItemId ? items.find((candidate) => candidate.id === slot.workItemId) : null;
+        if (current && current.id !== item.id) {
+          void recordActivityEvent({ eventType: "pause_requested", workItemId: current.id, source: "app" });
+          setPendingTransition({ targetId: id, targetStatus: status });
+          return false;
+        }
+        await switchFocusedWorkItem({
+          currentWorkItemId: null,
+          requestedWorkItemId: id,
+          expectedSlotRevision: slot.revision,
+          expectedCurrentRevision: null,
+          expectedRequestedRevision: item.revision,
+        });
+      } else {
+        await transitionWorkItem({
+          workItemId: id,
+          expectedRevision: item.revision,
+          targetStatus: status as Exclude<WorkItemStatus, "focus" | "done">,
+        });
+      }
       await refresh();
+      return true;
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
+      await refresh();
+      return false;
     }
   }
 
@@ -232,12 +365,44 @@ function App() {
     if (!item || item.status === status) return;
 
     const transition = { targetId: id, targetStatus: status };
-    if (requiresCheckpoint(focusItem?.id, transition)) {
+    const isLeavingFocus = item.status === "focus" && status !== "focus" && status !== "done";
+    const isReplacingFocus = status === "focus" && Boolean(focusItem && focusItem.id !== id);
+    if (isLeavingFocus || isReplacingFocus) {
+      if (focusItem) void recordActivityEvent({ eventType: "pause_requested", workItemId: focusItem.id, source: "app" });
       setPendingTransition(transition);
       return;
     }
 
     await commitMove(id, status);
+  }
+
+  async function handleResume(item: WorkItem) {
+    if (focusItem && focusItem.id !== item.id) {
+      void recordActivityEvent({ eventType: "pause_requested", workItemId: focusItem.id, source: "app" });
+      setPendingTransition({ targetId: item.id, targetStatus: "focus", openContextAfter: true });
+      return;
+    }
+    const moved = await commitMove(item.id, "focus");
+    if (moved) setContextItem(item);
+  }
+
+  async function handleApplySuggestion(suggestion: StatusSuggestion) {
+    const item = items.find((candidate) => candidate.id === suggestion.workItemId);
+    if (item && suggestion.proposedStatus === "done") {
+      setPendingCompletion(item);
+      return;
+    }
+    if (item?.status === "focus" && suggestion.proposedStatus !== "focus" && suggestion.proposedStatus !== "done") {
+      void recordActivityEvent({ eventType: "pause_requested", workItemId: item.id, source: "app" });
+      setPendingTransition({
+        targetId: item.id,
+        targetStatus: suggestion.proposedStatus,
+        suggestionId: suggestion.id,
+      });
+      return;
+    }
+    await applyStatusSuggestion(suggestion.id);
+    await refresh();
   }
 
   async function handleRename(id: string, title: string) {
@@ -312,6 +477,11 @@ function App() {
             Task
             <b>{items.filter((item) => item.status !== "done").length || ""}</b>
           </button>
+          <button className={`nav-item ${activeSection === "continuity" ? "active" : ""}`} type="button" title="업무 흐름" onClick={() => { setContinuityInitialTab("inbox"); setActiveSection("continuity"); }}>
+            <span className="nav-symbol"><Activity size={16} strokeWidth={1.75} aria-hidden="true" /></span>
+            업무 흐름
+            <b />
+          </button>
           <button
             className={`nav-item ${activeSection === "jira" ? "active" : ""}`}
             type="button"
@@ -377,16 +547,20 @@ function App() {
           </button>
         </nav>
 
-        <div className="sync-status">
-          <span className="sync-dot" />
-          로컬에 저장됨
-        </div>
+        <button className="sync-status" type="button" onClick={() => { setContinuityInitialTab("diagnostics"); setActiveSection("continuity"); }}>
+          <span className={`sync-dot ${sourceSyncStates.some((state) => ["failed", "auth-required", "rate-limited", "partial", "stale"].includes(state.status)) ? "needs-attention" : ""}`} />
+          {sourceSyncStates.length === 0
+            ? "연동 상태 확인"
+            : sourceSyncStates.some((state) => ["failed", "auth-required", "rate-limited"].includes(state.status))
+              ? "연동 확인 필요"
+              : `${sourceSyncStates.filter((state) => state.status === "fresh").length}/${sourceSyncStates.length}개 최신`}
+        </button>
       </aside>
 
-      <main className="workspace">
+      <main ref={workspaceRef} className="workspace">
         <header className="topbar">
           <div>
-            <h1>{activeSection === "dashboard" ? "Dashboard" : activeSection === "tasks" ? "Task" : activeSection === "calendar" ? "Calendar" : activeSection === "chat" ? "Chat" : activeSection === "sessions" ? "Workspace" : activeSection === "jira" ? "Jira Tickets" : activeSection === "pull_requests" ? "Pull Requests" : "Settings"}</h1>
+            <h1>{activeSection === "dashboard" ? "Dashboard" : activeSection === "tasks" ? "Task" : activeSection === "continuity" ? "업무 흐름" : activeSection === "calendar" ? "Calendar" : activeSection === "chat" ? "Chat" : activeSection === "sessions" ? "Workspace" : activeSection === "jira" ? "Jira Tickets" : activeSection === "pull_requests" ? "Pull Requests" : "Settings"}</h1>
             <span>{formatToday()}</span>
           </div>
           {activeSection === "tasks" && (
@@ -413,7 +587,23 @@ function App() {
         )}
 
         {activeSection === "dashboard" ? (
-          <DashboardPage />
+          <DashboardPage
+            workItems={items}
+            onResume={(item) => { void handleResume(item); }}
+            onOpenContext={setContextItem}
+            onOpenContinuity={() => { setContinuityInitialTab("inbox"); setActiveSection("continuity"); }}
+          />
+        ) : activeSection === "continuity" ? (
+          <ContinuityPage
+            workItems={items}
+            initialTab={continuityInitialTab}
+            onChanged={refresh}
+            onOpenTask={(item) => {
+              setActiveSection("tasks");
+              setActiveTaskTab(item.status === "done" ? "done" : item.status === "todo" ? "todo" : "ai_running");
+              setContextItem(item);
+            }}
+          />
         ) : activeSection === "calendar" ? (
           <CalendarPage />
         ) : activeSection === "chat" ? (
@@ -441,6 +631,18 @@ function App() {
             작업을 변경하지 못했습니다.
             <small>{error}</small>
           </div>
+        )}
+
+        {statusSuggestions.length > 0 && (
+          <StatusSuggestionRail
+            suggestions={statusSuggestions}
+            items={items}
+            onApply={async (id) => {
+              const suggestion = statusSuggestions.find((candidate) => candidate.id === id);
+              if (suggestion) await handleApplySuggestion(suggestion);
+            }}
+            onIgnore={async (id) => { await ignoreStatusSuggestion(id); await refresh(); }}
+          />
         )}
 
         {activeTaskTab === "today" ? (
@@ -571,18 +773,86 @@ function App() {
       )}
 
       {pendingTransition && focusItem && (
-        <TransitionCheckpoint
-          focusItem={focusItem}
+        <InterruptionDialog
+          item={focusItem}
+          evidence={interruptionEvidence}
+          draft={interruptionDraft}
+          targetStatus={pendingTransition.targetId === focusItem.id ? pendingTransition.targetStatus : "todo"}
           destination={
             pendingTransition.targetId === focusItem.id
               ? statusMeta[pendingTransition.targetStatus].label
               : items.find((item) => item.id === pendingTransition.targetId)?.title || "다음 작업"
           }
-          onCancel={() => setPendingTransition(null)}
-          onConfirm={async (checkpoint, nextAction) => {
-            await updateCheckpoint(focusItem.id, checkpoint, nextAction);
-            await commitMove(pendingTransition.targetId, pendingTransition.targetStatus);
+          onCancel={() => {
+            void recordActivityEvent({ eventType: "pause_cancelled", workItemId: focusItem.id, source: "app" });
             setPendingTransition(null);
+          }}
+          onConfirm={async (values: InterruptionValues) => {
+            if (pendingTransition.targetStatus === "focus" && pendingTransition.targetId !== focusItem.id) {
+              const requested = items.find((item) => item.id === pendingTransition.targetId);
+              if (!requested) throw new Error("재개할 작업을 찾을 수 없습니다.");
+              const slot = await getFocusSlot();
+              await switchFocusedWorkItem({
+                currentWorkItemId: focusItem.id,
+                requestedWorkItemId: requested.id,
+                expectedSlotRevision: slot.revision,
+                expectedCurrentRevision: focusItem.revision,
+                expectedRequestedRevision: requested.revision,
+                releaseStatus: "todo",
+                ...values,
+              });
+              if (pendingTransition.openContextAfter) setContextItem(requested);
+            } else {
+              const releaseStatus = pendingTransition.targetStatus as "todo" | "ai_running" | "review" | "blocked";
+              const slot = await getFocusSlot();
+              await switchFocusedWorkItem({
+                currentWorkItemId: focusItem.id,
+                requestedWorkItemId: null,
+                expectedSlotRevision: slot.revision,
+                expectedCurrentRevision: focusItem.revision,
+                expectedRequestedRevision: null,
+                releaseStatus,
+                correlationId: pendingTransition.suggestionId,
+                ...values,
+              });
+            }
+            await refresh();
+            if ((interruptionDraft.checkpoint && values.checkpoint === interruptionDraft.checkpoint)
+              || (interruptionDraft.nextAction && values.nextAction === interruptionDraft.nextAction)) {
+              void recordAutomationApproval({
+                ruleKind: "prepare-draft",
+                normalizedSourceIdentity: "checkpoint:evidence-draft",
+                approved: true,
+                confidence: 1,
+              });
+            }
+            setPendingTransition(null);
+          }}
+        />
+      )}
+
+      {pendingCompletion && (
+        <CompletionSheet
+          item={pendingCompletion}
+          evidence={completionEvidence}
+          onCancel={() => setPendingCompletion(null)}
+          onComplete={async (values) => {
+            await completeWorkItem({
+              workItemId: pendingCompletion.id,
+              expectedRevision: pendingCompletion.revision,
+              resultSummary: values.resultSummary,
+              decisions: values.decisions,
+              remainingRisk: values.remainingRisks,
+              retrospective: values.retrospective,
+              evidence: completionEvidence,
+            });
+            const hasJira = completionEvidence.some((entry) => entry.source === "jira");
+            setPendingCompletion(null);
+            await refresh();
+            if (hasJira) {
+              setContinuityInitialTab("writeback");
+              setActiveSection("continuity");
+            }
           }}
         />
       )}
@@ -636,6 +906,39 @@ function Summary({ label, value, accent = false }: { label: string; value: numbe
       <span>{label}</span>
       <strong className={accent && value > 0 ? "accent" : ""}>{value}</strong>
     </div>
+  );
+}
+
+function StatusSuggestionRail({
+  suggestions,
+  items,
+  onApply,
+  onIgnore,
+}: {
+  suggestions: StatusSuggestion[];
+  items: WorkItem[];
+  onApply: (id: string) => Promise<void>;
+  onIgnore: (id: string) => Promise<void>;
+}) {
+  const [pendingId, setPendingId] = useState<string | null>(null);
+  return (
+    <section className="status-suggestion-rail" aria-label="상태 변경 제안">
+      <header><div><Sparkles size={14} /><strong>확인할 상태 제안</strong></div><span>{suggestions.length}개</span></header>
+      <div>
+        {suggestions.slice(0, 4).map((suggestion) => {
+          const item = items.find((candidate) => candidate.id === suggestion.workItemId);
+          return (
+            <article key={suggestion.id}>
+              <div><span>{suggestion.source.toUpperCase()} · {statusMeta[suggestion.proposedStatus].label}</span><strong>{item?.title || "삭제된 작업"}</strong><p>{suggestion.reason}</p></div>
+              <div>
+                <button type="button" disabled={pendingId === suggestion.id} onClick={() => { setPendingId(suggestion.id); void onIgnore(suggestion.id).finally(() => setPendingId(null)); }}>무시</button>
+                <button className="primary-button" type="button" disabled={pendingId === suggestion.id} onClick={() => { setPendingId(suggestion.id); void onApply(suggestion.id).finally(() => setPendingId(null)); }}>적용</button>
+              </div>
+            </article>
+          );
+        })}
+      </div>
+    </section>
   );
 }
 
@@ -754,7 +1057,12 @@ function CheckpointEditor({ item, onSaved }: { item: WorkItem; onSaved: () => Pr
 
   async function save(event: FormEvent) {
     event.preventDefault();
-    await updateCheckpoint(item.id, checkpoint, nextAction);
+    await updateWorkItemCheckpoint({
+      workItemId: item.id,
+      expectedRevision: item.revision,
+      checkpoint,
+      nextAction,
+    });
     setIsEditing(false);
     await onSaved();
   }
@@ -1120,7 +1428,17 @@ function TaskContextModal({ item, onClose, onChanged }: { item: WorkItem; onClos
         ? nextState
         : candidate.completionState,
     );
-    await moveWorkItem(item.id, taskStatusForSessions(nextStates));
+    const proposedStatus = taskStatusSuggestionForSessions(nextStates);
+    if (proposedStatus && proposedStatus !== item.status) {
+      await createStatusSuggestion({
+        workItemId: item.id,
+        source: "ai_session",
+        proposedStatus,
+        reason: proposedStatus === "review"
+          ? "연결된 AI 세션이 모두 완료되어 결과 확인이 필요합니다."
+          : "연결된 AI 세션에서 진행 중인 작업이 관측되었습니다.",
+      });
+    }
     await refreshContext();
     await onChanged();
   }
@@ -1181,6 +1499,7 @@ function TaskContextModal({ item, onClose, onChanged }: { item: WorkItem; onClos
               <div><strong>{link.label}</strong><span>Slack 원문 메시지</span></div>
               <div className="context-row-actions">
                 {link.externalUrl && <button type="button" onClick={() => void openUrl(link.externalUrl!)}>원문</button>}
+                {link.externalId && <button type="button" onClick={async () => { await saveSlackMessageToInbox(link.externalId!); setAutoConnectMessage("Slack 메시지를 Inbox에 저장했습니다."); }}>Inbox 저장</button>}
                 <button type="button" onClick={async () => { await deleteWorkItemLink(link.id); await refreshContext(); }}>해제</button>
               </div>
             </div>
@@ -1326,74 +1645,6 @@ function formatDevelopmentStatus(value: string) {
     queued: "대기 중",
   };
   return labels[value.toLocaleLowerCase()] || value;
-}
-
-function TransitionCheckpoint({
-  focusItem,
-  destination,
-  onCancel,
-  onConfirm,
-}: {
-  focusItem: WorkItem;
-  destination: string;
-  onCancel: () => void;
-  onConfirm: (checkpoint: string, nextAction: string) => Promise<void>;
-}) {
-  const [checkpoint, setCheckpoint] = useState(focusItem.checkpoint || "");
-  const [nextAction, setNextAction] = useState(focusItem.nextAction || "");
-  const [isSaving, setIsSaving] = useState(false);
-  const isValid = checkpoint.trim().length > 0 && nextAction.trim().length > 0;
-
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    if (!isValid) return;
-    setIsSaving(true);
-    try {
-      await onConfirm(checkpoint, nextAction);
-    } finally {
-      setIsSaving(false);
-    }
-  }
-
-  return (
-    <div className="modal-backdrop checkpoint-backdrop">
-      <form className="composer transition-checkpoint" onSubmit={submit}>
-        <div className="transition-context">
-          <span>작업 전환 전 체크포인트</span>
-          <h2>{focusItem.title}</h2>
-          <p><strong>{destination}</strong>(으)로 이동하기 전에 돌아올 지점을 남겨주세요.</p>
-        </div>
-
-        <label>
-          현재까지 한 것 <em>필수</em>
-          <textarea
-            value={checkpoint}
-            onChange={(event) => setCheckpoint(event.target.value)}
-            placeholder="예: OAuth callback과 토큰 저장까지 구현함"
-            autoFocus
-          />
-        </label>
-        <label>
-          돌아왔을 때 첫 번째 행동 <em>필수</em>
-          <textarea
-            value={nextAction}
-            onChange={(event) => setNextAction(event.target.value)}
-            placeholder="예: 저장된 토큰으로 PR API 호출하기"
-          />
-        </label>
-
-        <div className="checkpoint-note">
-          이 기록은 작업 상단에 표시되어 다음 시작점을 바로 알려줍니다.
-        </div>
-        <div className="composer-actions">
-          <button type="button" onClick={onCancel}>계속 작업</button>
-          <button className="primary-button" type="submit" disabled={!isValid || isSaving}>
-            {isSaving ? "전환 중…" : "기록하고 전환"}
-          </button>
-        </div>
-      </form>
-    </div>
-  );
 }
 
 export default App;
