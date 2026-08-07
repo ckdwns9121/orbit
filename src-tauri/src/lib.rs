@@ -3,6 +3,7 @@ use std::{
     sync::{Mutex, OnceLock},
 };
 use tauri::{
+    image::Image,
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Manager, WindowEvent,
 };
@@ -378,8 +379,11 @@ pub fn run() {
                 });
             }
 
+            let tray_icon = Image::from_bytes(include_bytes!("../icons/tray-icon.png"))
+                .expect("valid Orbit tray icon");
+
             TrayIconBuilder::with_id("orbit")
-                .icon(app.default_window_icon().expect("default app icon").clone())
+                .icon(tray_icon)
                 .icon_as_template(true)
                 .tooltip("Orbit · 작업 빠른 보기")
                 .on_tray_icon_event(|tray, event| {
