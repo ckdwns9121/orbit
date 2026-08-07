@@ -75,17 +75,6 @@ export async function syncLocalAiSessions(): Promise<AiSession[]> {
     );
   }
 
-  await database.execute(
-    `UPDATE work_items
-     SET status = 'ai_running', completed_at = NULL, updated_at = $1
-     WHERE status = 'done' AND id IN (
-       SELECT DISTINCT linked_work_item_id
-       FROM ai_sessions
-       WHERE linked_work_item_id IS NOT NULL AND completion_state = 'active'
-     )`,
-    [discoveredAt],
-  );
-
   return listAiSessions();
 }
 

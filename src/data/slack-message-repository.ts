@@ -1,6 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { SlackMessage, SlackSearchResult } from "../domain/slack-message";
+import type { SourceSyncState } from "../domain/work-continuity";
+import { normalizeSourceScope, sourceDefinitions } from "../sources/source-capability";
 import { getDatabase } from "./database";
+import { queryCacheProvenance, type QueryCacheResult } from "./query-cache-provenance";
+import { getSourceSyncState, runScopedSourceRefresh, safeSyncErrorSummary, type ScopedRefreshResult } from "./source-sync-repository";
 
 interface SlackMessageRow {
   id: string;
@@ -49,6 +53,13 @@ async function listCachedSearch(queryKey: string): Promise<{ searchedAt: string;
   return { searchedAt: searches[0].searched_at, messages: rows.map(toMessage) };
 }
 
+export interface SlackSearchDependencies {
+  loadExactCache: typeof listCachedSearch;
+  loadRelatedCache: typeof listRelatedCachedSlackMessages;
+  refresh: (query: string, queryKey: string, scopeKey: string, force?: boolean) => Promise<ScopedRefreshResult<SlackMessage[]>>;
+  readSyncState: (scopeKey: string) => Promise<SourceSyncState | null>;
+}
+
 export async function listRelatedCachedSlackMessages(query: string, limit = 30): Promise<SlackMessage[]> {
   const database = await getDatabase();
   const rows = await database.select<SlackMessageRow[]>(
@@ -68,20 +79,65 @@ export async function listRelatedCachedSlackMessages(query: string, limit = 30):
     .map((item) => item.message);
 }
 
-export async function searchSlackMessages(query: string): Promise<SlackMessage[]> {
-  const queryKey = normalizeQuery(query);
-  if (!queryKey) return [];
-  const cached = await listCachedSearch(queryKey);
-  if (cached && Date.now() - new Date(cached.searchedAt).getTime() < 10 * 60 * 1_000) return cached.messages;
+const defaultSlackSearchDependencies: SlackSearchDependencies = {
+  loadExactCache: listCachedSearch,
+  loadRelatedCache: listRelatedCachedSlackMessages,
+  refresh: (query, queryKey, scopeKey, force) => runScopedSourceRefresh({
+    source: "slack",
+    scopeKey,
+    ttlMs: sourceDefinitions.slack.ttlMs,
+    force,
+    refresh: async () => {
+      const messages = await performSlackSearch(query, queryKey);
+      return { data: messages, itemCount: messages.length };
+    },
+  }),
+  readSyncState: (scopeKey) => getSourceSyncState("slack", scopeKey),
+};
 
-  let result: SlackSearchResult;
+export async function searchSlackMessagesWithProvenance(
+  query: string,
+  options: { force?: boolean } = {},
+  dependencies: SlackSearchDependencies = defaultSlackSearchDependencies,
+): Promise<QueryCacheResult<SlackMessage>> {
+  const queryKey = normalizeQuery(query);
+  if (!queryKey) return { items: [], provenance: queryCacheProvenance(null, "remote") };
+  const scope = normalizeSourceScope("slack", queryKey);
+  const cached = await dependencies.loadExactCache(queryKey);
   try {
-    result = await invoke<SlackSearchResult>("search_slack_messages", { query });
+    const result = await dependencies.refresh(query, queryKey, scope.scopeKey, options.force);
+    if (result.data) {
+      return { items: result.data, provenance: queryCacheProvenance(result.state, "remote") };
+    }
+    const cache = await dependencies.loadExactCache(queryKey);
+    return {
+      items: cache?.messages ?? [],
+      provenance: queryCacheProvenance(result.state, "cache", cache?.searchedAt ?? cached?.searchedAt ?? null),
+    };
   } catch (cause) {
-    const fallback = cached?.messages.length ? cached.messages : await listRelatedCachedSlackMessages(query);
-    if (fallback.length) return fallback;
+    const fallback = cached?.messages.length ? cached.messages : await dependencies.loadRelatedCache(query);
+    if (fallback.length) {
+      const failedState = await dependencies.readSyncState(scope.scopeKey).catch(() => null);
+      return {
+        items: fallback,
+        provenance: queryCacheProvenance(
+          failedState,
+          "cache",
+          cached?.searchedAt ?? null,
+          safeSyncErrorSummary(cause),
+        ),
+      };
+    }
     throw cause;
   }
+}
+
+export async function searchSlackMessages(query: string, options: { force?: boolean } = {}): Promise<SlackMessage[]> {
+  return (await searchSlackMessagesWithProvenance(query, options)).items;
+}
+
+async function performSlackSearch(query: string, queryKey: string): Promise<SlackMessage[]> {
+  const result = await invoke<SlackSearchResult>("search_slack_messages", { query });
 
   const database = await getDatabase();
   const discoveredAt = new Date().toISOString();
@@ -90,7 +146,11 @@ export async function searchSlackMessages(query: string): Promise<SlackMessage[]
      ON CONFLICT(query_key) DO UPDATE SET query = excluded.query, searched_at = excluded.searched_at`,
     [queryKey, result.query, discoveredAt],
   );
-  await database.execute("DELETE FROM slack_search_results WHERE query_key = $1", [queryKey]);
+  const currentResults = await database.select<Array<{ message_id: string }>>(
+    "SELECT message_id FROM slack_search_results WHERE query_key = $1",
+    [queryKey],
+  );
+  const nextMessageIds = new Set(result.messages.map((message) => message.id));
   for (const message of result.messages) {
     await database.execute(
       `INSERT INTO slack_messages (
@@ -106,6 +166,15 @@ export async function searchSlackMessages(query: string): Promise<SlackMessage[]
       "INSERT OR IGNORE INTO slack_search_results (query_key, message_id) VALUES ($1, $2)",
       [queryKey, message.id],
     );
+  }
+  // Reconcile only after every new record/link has been safely upserted.
+  for (const current of currentResults) {
+    if (!nextMessageIds.has(current.message_id)) {
+      await database.execute(
+        "DELETE FROM slack_search_results WHERE query_key = $1 AND message_id = $2",
+        [queryKey, current.message_id],
+      );
+    }
   }
   return result.messages.map((message) => ({ ...message, discoveredAt }));
 }

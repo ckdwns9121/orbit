@@ -7,6 +7,7 @@ import type {
 } from "../domain/work-item";
 import { getDatabase } from "./database";
 import type { TaskAiFixSuggestion } from "../domain/task-ai-fix";
+import { getWorkItemContinuity, updateWorkItemCheckpoint } from "./work-continuity-repository";
 
 interface WorkItemRow {
   id: string;
@@ -20,6 +21,12 @@ interface WorkItemRow {
   checkpoint: string | null;
   next_action: string | null;
   done_definition: string | null;
+  blocked_reason: string | null;
+  resume_condition: string | null;
+  paused_at: string | null;
+  last_focused_at: string | null;
+  next_review_at: string | null;
+  revision: number;
   target_at: string | null;
   reminder_sent_at: string | null;
   position: number;
@@ -30,7 +37,8 @@ interface WorkItemRow {
 
 const selectFields = `
   id, title, status, priority, source, external_id, external_url,
-  goal, checkpoint, next_action, done_definition, target_at, reminder_sent_at, position,
+  goal, checkpoint, next_action, done_definition, blocked_reason, resume_condition,
+  paused_at, last_focused_at, next_review_at, revision, target_at, reminder_sent_at, position,
   created_at, updated_at, completed_at
 `;
 
@@ -47,6 +55,12 @@ function toWorkItem(row: WorkItemRow): WorkItem {
     checkpoint: row.checkpoint,
     nextAction: row.next_action,
     doneDefinition: row.done_definition,
+    blockedReason: row.blocked_reason,
+    resumeCondition: row.resume_condition,
+    pausedAt: row.paused_at,
+    lastFocusedAt: row.last_focused_at,
+    nextReviewAt: row.next_review_at,
+    revision: row.revision,
     targetAt: row.target_at,
     reminderSentAt: row.reminder_sent_at,
     position: row.position,
@@ -84,11 +98,8 @@ export async function createWorkItem(input: CreateWorkItemInput): Promise<string
   const now = new Date().toISOString();
   const id = crypto.randomUUID();
 
-  if (input.status === "focus") {
-    await database.execute(
-      "UPDATE work_items SET status = 'todo', updated_at = $1 WHERE status = 'focus'",
-      [now],
-    );
+  if (input.status === "focus" || input.status === "done") {
+    throw new Error("새 작업은 만든 뒤 집중 또는 완료 흐름에서 상태를 변경해주세요.");
   }
 
   const [{ next_position }] = await database.select<Array<{ next_position: number }>>(
@@ -117,33 +128,6 @@ export async function createWorkItem(input: CreateWorkItemInput): Promise<string
   return id;
 }
 
-export async function moveWorkItem(id: string, status: WorkItemStatus): Promise<void> {
-  const database = await getDatabase();
-  const now = new Date().toISOString();
-  const completedAt = status === "done" ? now : null;
-
-  if (status === "focus") {
-    await database.execute(
-      `UPDATE work_items
-       SET status = CASE WHEN id = $1 THEN 'focus' ELSE 'todo' END,
-           completed_at = NULL,
-           updated_at = $2
-       WHERE id = $1 OR status = 'focus'`,
-      [id, now],
-    );
-    return;
-  }
-
-  const [{ next_position }] = await database.select<Array<{ next_position: number }>>(
-    "SELECT COALESCE(MAX(position), -1) + 1 AS next_position FROM work_items WHERE status = $1",
-    [status],
-  );
-  await database.execute(
-    "UPDATE work_items SET status = $1, completed_at = $2, updated_at = $3, position = $4 WHERE id = $5",
-    [status, completedAt, now, next_position, id],
-  );
-}
-
 export async function reorderWorkItems(status: WorkItemStatus, orderedIds: string[]): Promise<void> {
   if (orderedIds.length < 2) return;
   const database = await getDatabase();
@@ -162,13 +146,14 @@ export async function updateCheckpoint(
   checkpoint: string,
   nextAction: string,
 ): Promise<void> {
-  const database = await getDatabase();
-  await database.execute(
-    `UPDATE work_items
-     SET checkpoint = $1, next_action = $2, updated_at = $3
-     WHERE id = $4`,
-    [checkpoint.trim() || null, nextAction.trim() || null, new Date().toISOString(), id],
-  );
+  const current = await getWorkItemContinuity(id);
+  if (!current) throw new Error("작업을 찾을 수 없습니다.");
+  await updateWorkItemCheckpoint({
+    workItemId: id,
+    expectedRevision: current.revision,
+    checkpoint,
+    nextAction,
+  });
 }
 
 export async function updateWorkItemTitle(id: string, title: string): Promise<void> {

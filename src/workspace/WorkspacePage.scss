@@ -8,7 +8,7 @@
 .session-stats > div:last-child { border-right: 0; }
 .session-stats span, .session-stats strong { display: block; }
 .session-stats span { color: var(--text-muted); font-size: 10px; }
-.session-stats strong { margin-top: 5px; font-size: 20px; }
+.session-stats strong { margin-top: 5px; font-size: 19px; }
 .session-stats .accent strong { color: var(--accent); }
 
 .session-controls { display: flex; align-items: center; justify-content: space-between; gap: 20px; height: 58px; padding: 0 32px; border-bottom: 1px solid var(--border); }
@@ -31,7 +31,7 @@
 .provider-mark.codex { color: #3f6d5b; }
 .session-copy { min-width: 0; }
 .session-copy strong, .session-copy small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.session-copy strong { font-size: 12px; font-weight: 650; }
+.session-copy strong { font-size: 11px; font-weight: 650; }
 .session-copy small { margin-top: 5px; color: var(--text-muted); font-size: 10px; }
 .session-signals { display: flex; align-items: center; gap: 6px; }
 .session-signals i { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
@@ -42,7 +42,7 @@
 .session-detail { min-height: 0; overflow-y: auto; padding: 28px 32px 40px; background: var(--canvas); }
 .session-detail-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding-bottom: 20px; border-bottom: 1px solid var(--border); }
 .session-detail-heading span { color: var(--text-muted); font-size: 10px; }
-.session-detail-heading h2 { margin: 7px 0 0; font-size: 20px; line-height: 1.35; letter-spacing: -.4px; }
+.session-detail-heading h2 { margin: 7px 0 0; font-size: 19px; line-height: 1.35; letter-spacing: -.4px; }
 .provider-pill { display: inline-flex; flex-shrink: 0; align-items: center; gap: 5px; padding: 4px 7px; border: 1px solid var(--border); border-radius: 4px; text-transform: uppercase; }
 .provider-pill.claude { color: #a84f2d; }
 .provider-pill.codex { color: #3f6d5b; }
@@ -82,7 +82,7 @@
 .session-modal-icon.codex { color: #3f8067; }
 .session-modal > header > div:nth-child(2) > span { color: var(--text-muted); font-size: 10px; }
 .session-modal-title { display: flex; align-items: flex-start; gap: 10px; margin-top: 5px; }
-.session-modal-title h2 { min-width: 0; margin: 0; font-size: 19px; line-height: 1.35; letter-spacing: -.3px; }
+.session-modal-title h2 { min-width: 0; margin: 0; font-size: 18px; line-height: 1.35; letter-spacing: -.3px; }
 .session-modal-title button { flex-shrink: 0; min-height: 25px; padding-inline: 7px; color: var(--accent); background: transparent; border-color: transparent; font-size: 9px; }
 .session-modal-close { min-width: 30px; min-height: 30px; padding: 0; border: 0; background: transparent; font-size: 21px; }
 .session-title-form { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 6px; margin-top: 7px; }
