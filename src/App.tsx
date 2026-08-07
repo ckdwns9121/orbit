@@ -6,7 +6,6 @@ import {
   Calendar,
   Check,
   CheckSquare,
-  ChevronDown,
   CircleCheck,
   GitBranch,
   GitCommitHorizontal,
@@ -15,7 +14,9 @@ import {
   LayoutDashboard,
   LayoutGrid,
   Link2,
+  LockKeyhole,
   MessageCircle,
+  MoreHorizontal,
   PanelLeftClose,
   PanelLeftOpen,
   Pencil,
@@ -45,18 +46,26 @@ import {
   type WorkItemSessionProgress,
 } from "./data/ai-session-repository";
 import {
+  createWorkItemLink,
   deleteWorkItemLink,
+  extractJiraKey,
   listWorkItemLinks,
 } from "./data/work-item-link-repository";
 import {
   getCachedJiraIssueDevelopment,
   syncJiraIssueDevelopment,
 } from "./data/jira-development-repository";
+import {
+  listCachedJiraIssues,
+  listJiraTaskLinks,
+  refreshAssignedJiraIssues,
+} from "./data/jira-issue-repository";
 import { autoConnectTaskAiSessions } from "./data/context-discovery-repository";
 import {
   statusMeta,
   workItemStatuses,
   type WorkItem,
+  type WorkItemPriority,
   type WorkItemStatus,
 } from "./domain/work-item";
 import { displaySessionTitle, projectName, type AiSession } from "./domain/ai-session";
@@ -65,8 +74,10 @@ import {
   type JiraIssueDevelopment,
 } from "./domain/jira-development";
 import type { WorkItemLink } from "./domain/work-item-link";
+import type { JiraIssue, JiraTaskLink } from "./domain/jira-issue";
 import { taskStatusSuggestionForSessions } from "./domain/task-flow";
 import { isTaskSortMode, reorderWorkItemIds, sortWorkItems, type TaskSortMode } from "./domain/work-item-sort";
+import { taskBoardLaneForStatus, taskBoardLanes, type TaskBoardLane } from "./domain/task-board";
 import CalendarPage from "./calendar/CalendarPage";
 import SettingsPage from "./settings/SettingsPage";
 import WorkspacePage from "./workspace/WorkspacePage";
@@ -76,6 +87,7 @@ import TaskContextDiscoveryModal from "./context/TaskContextDiscoveryModal";
 import ChatPage from "./chat/ChatPage";
 import DashboardPage from "./dashboard/DashboardPage";
 import ServiceIcon, { serviceIconForProvider } from "./components/ServiceIcon";
+import SearchCombobox, { type SearchComboboxOption } from "./components/SearchCombobox";
 import QuickPanel from "./quick-panel/QuickPanel";
 import { getAppSettings } from "./data/settings-repository";
 import { DEFAULT_QUICK_PANEL_SHORTCUT, displayShortcut, matchesShortcutEvent, shortcutSettingsFromStored } from "./domain/shortcuts";
@@ -91,7 +103,6 @@ import {
   recordActivityEvent,
   switchFocusedWorkItem,
   transitionWorkItem,
-  updateWorkItemCheckpoint,
 } from "./data/work-continuity-repository";
 import type { StatusSuggestion } from "./domain/work-continuity";
 import { InterruptionDialog, type InterruptionValues } from "./continuity/ContinuityDialogs";
@@ -106,16 +117,15 @@ import { prepareEnabledCheckpointDraft, recordAutomationApproval } from "./data/
 import { recoverDurableJiraOutbox } from "./sources/jira-outbox-recovery";
 
 type PrimarySection = "dashboard" | "tasks" | "continuity" | "calendar" | "chat" | "sessions" | "jira" | "pull_requests" | "settings";
-type TaskTab = "today" | "todo" | "ai_running" | "done";
-
-const taskTabs: Array<{ id: TaskTab; label: string }> = [
-  { id: "todo", label: "할 일" },
-  { id: "ai_running", label: "진행 중" },
-  { id: "done", label: "완료" },
-];
 
 const TASK_SORT_STORAGE_KEY = "orbit.task-sort";
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "orbit.sidebar-collapsed";
+
+const taskBoardLaneMeta: Record<TaskBoardLane, { label: string; description: string }> = {
+  todo: { label: "할 일", description: "시작을 기다리는 모든 작업" },
+  ai_running: { label: "진행 중", description: "현재 실행하고 있는 작업" },
+  done: { label: "완료", description: "결과와 근거를 남긴 작업" },
+};
 
 function formatToday() {
   return new Intl.DateTimeFormat("ko-KR", {
@@ -171,7 +181,6 @@ function App() {
   const [interruptionDraft, setInterruptionDraft] = useState<{ checkpoint?: string; nextAction?: string }>({});
   const [activeSection, setActiveSection] = useState<PrimarySection>("dashboard");
   const [continuityInitialTab, setContinuityInitialTab] = useState<ContinuityTab>("inbox");
-  const [activeTaskTab, setActiveTaskTab] = useState<TaskTab>("todo");
   const [contextItem, setContextItem] = useState<WorkItem | null>(null);
   const [deleteItem, setDeleteItem] = useState<WorkItem | null>(null);
   const [sessionProgress, setSessionProgress] = useState<Record<string, WorkItemSessionProgress>>({});
@@ -195,12 +204,21 @@ function App() {
   }, [items]);
 
   const focusItem = groupedItems.focus[0];
-  const nextItems = [...groupedItems.review, ...groupedItems.todo].slice(0, 5);
   const quickPanelItems = items.filter((item) => item.status !== "done" && item.status !== "inbox").slice(0, 12);
 
   useEffect(() => {
     workspaceRef.current?.scrollTo({ top: 0, left: 0 });
   }, [activeSection]);
+
+  useEffect(() => {
+    if (!focusItem) return;
+    setActiveSection("tasks");
+    setIsQuickPanelOpen(false);
+    setIsComposerOpen(false);
+    setDiscoveryTask(null);
+    setDeleteItem(null);
+    setContextItem((current) => current?.id === focusItem.id ? current : null);
+  }, [focusItem?.id]);
 
   const refresh = useCallback(async () => {
     try {
@@ -235,10 +253,16 @@ function App() {
   }, [refresh]);
 
   useEffect(() => {
-    setShortcutActions({
+    setShortcutActions(focusItem ? {
+      openQuickPanel: () => undefined,
+      openChat: () => undefined,
+    } : {
       openQuickPanel: () => setIsQuickPanelOpen(true),
       openChat: () => { setIsQuickPanelOpen(false); setActiveSection("chat"); },
     });
+  }, [focusItem?.id]);
+
+  useEffect(() => {
     void getAppSettings()
       .then((stored) => syncGlobalShortcuts(shortcutSettingsFromStored(stored)))
       .catch((cause) => setShortcutError(cause instanceof Error ? cause.message : String(cause)));
@@ -305,6 +329,7 @@ function App() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (focusItem) return;
       const shortcuts = getRegisteredShortcuts();
       if (!shortcuts) return;
       if (matchesShortcutEvent(event, shortcuts.quickPanel)) {
@@ -318,7 +343,7 @@ function App() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+  }, [focusItem?.id]);
 
   async function commitMove(id: string, status: WorkItemStatus): Promise<boolean> {
     try {
@@ -430,7 +455,7 @@ function App() {
   }
 
   return (
-    <div className={`app-shell ${isSidebarCollapsed ? "sidebar-collapsed" : ""}`}>
+    <div className={`app-shell ${isSidebarCollapsed ? "sidebar-collapsed" : ""} ${focusItem ? "has-focus-lock" : ""}`}>
       {shortcutError && (
         <div className="global-shortcut-error" role="alert">
           <div><strong>전역 단축키를 사용할 수 없습니다.</strong><span>{shortcutError}</span></div>
@@ -438,7 +463,7 @@ function App() {
           <button type="button" aria-label="알림 닫기" onClick={() => setShortcutError(null)}><X size={14} /></button>
         </div>
       )}
-      <aside className="sidebar">
+      <aside className="sidebar" inert={focusItem ? true : undefined} aria-hidden={focusItem ? true : undefined}>
         <div className="traffic-lights" aria-hidden="true">
           <span />
           <span />
@@ -558,7 +583,7 @@ function App() {
       </aside>
 
       <main ref={workspaceRef} className="workspace">
-        <header className="topbar">
+        <header className="topbar" inert={focusItem ? true : undefined} aria-hidden={focusItem ? true : undefined}>
           <div>
             <h1>{activeSection === "dashboard" ? "Dashboard" : activeSection === "tasks" ? "Task" : activeSection === "continuity" ? "업무 흐름" : activeSection === "calendar" ? "Calendar" : activeSection === "chat" ? "Chat" : activeSection === "sessions" ? "Workspace" : activeSection === "jira" ? "Jira Tickets" : activeSection === "pull_requests" ? "Pull Requests" : "Settings"}</h1>
             <span>{formatToday()}</span>
@@ -569,22 +594,6 @@ function App() {
             </button>
           )}
         </header>
-
-        {activeSection === "tasks" && (
-          <nav className="task-tabs" aria-label="Task 보기">
-            {taskTabs.map((tab) => (
-              <button
-                className={activeTaskTab === tab.id ? "active" : ""}
-                type="button"
-                key={tab.id}
-                onClick={() => setActiveTaskTab(tab.id)}
-              >
-                {tab.label}
-                {tab.id !== "today" && groupedItems[tab.id].length > 0 && <span>{groupedItems[tab.id].length}</span>}
-              </button>
-            ))}
-          </nav>
-        )}
 
         {activeSection === "dashboard" ? (
           <DashboardPage
@@ -600,7 +609,6 @@ function App() {
             onChanged={refresh}
             onOpenTask={(item) => {
               setActiveSection("tasks");
-              setActiveTaskTab(item.status === "done" ? "done" : item.status === "todo" ? "todo" : "ai_running");
               setContextItem(item);
             }}
           />
@@ -615,7 +623,7 @@ function App() {
             onOpenTask={(id) => {
               setActiveSection("tasks");
               const linked = items.find((item) => item.id === id);
-              setActiveTaskTab(linked?.status === "done" ? "done" : linked?.status === "todo" ? "todo" : "ai_running");
+              if (linked) setContextItem(linked);
             }}
           />
         ) : activeSection === "jira" ? (
@@ -635,6 +643,7 @@ function App() {
 
         {statusSuggestions.length > 0 && (
           <StatusSuggestionRail
+            isLocked={Boolean(focusItem)}
             suggestions={statusSuggestions}
             items={items}
             onApply={async (id) => {
@@ -645,108 +654,19 @@ function App() {
           />
         )}
 
-        {activeTaskTab === "today" ? (
-          <>
-        <section className={`focus-panel ${focusItem ? "" : "empty-focus"}`}>
-          <div className="section-kicker"><span /> 지금 집중</div>
-          {focusItem ? (
-            <>
-              <div className="focus-heading">
-                <div>
-                  <h2>{focusItem.title}</h2>
-                  <p>{focusItem.nextAction || "다음 행동을 기록하면 작업을 더 쉽게 재개할 수 있어요."}</p>
-                </div>
-                <div className="focus-actions">
-                  <button type="button" className="primary-button" onClick={() => handleMove(focusItem.id, "done")}>완료</button>
-                  <button type="button" onClick={() => handleMove(focusItem.id, "ai_running")}>AI에게 맡기기</button>
-                  <button type="button" onClick={() => handleMove(focusItem.id, "blocked")}>막힘</button>
-                </div>
-              </div>
-              <CheckpointEditor item={focusItem} onSaved={refresh} />
-            </>
-          ) : (
-            <div className="focus-empty-content">
-              <div>
-                <h2>집중할 작업을 선택하세요</h2>
-                <p>사람의 집중 작업은 한 번에 하나만 유지합니다.</p>
-              </div>
-              {groupedItems.todo[0] && (
-                <button className="primary-button" type="button" onClick={() => handleMove(groupedItems.todo[0].id, "focus")}>
-                  다음 작업 시작
-                </button>
-              )}
-            </div>
-          )}
-        </section>
-
-        <section className="summary-row" aria-label="작업 요약">
-          <Summary label="내 확인 필요" value={groupedItems.review.length} accent />
-          <Summary label="AI 작업 중" value={groupedItems.ai_running.length} />
-          <Summary label="할 일" value={groupedItems.todo.length} />
-          <Summary label="오늘 완료" value={groupedItems.done.length} />
-        </section>
-
-        <div className="content-grid">
-          <section className="task-section">
-            <div className="section-heading">
-              <div>
-                <h3>다음 작업</h3>
-                <span>확인이 필요한 일과 실행할 준비가 된 일</span>
-              </div>
-              <span>{nextItems.length}개</span>
-            </div>
-
-            {isLoading ? (
-              <div className="empty-state">작업을 불러오는 중…</div>
-            ) : nextItems.length ? (
-              <div className="task-list">
-                {nextItems.map((item) => (
-                  <TaskRow key={item.id} item={item} progress={sessionProgress[item.id]} onMove={handleMove} onRename={handleRename} onOpenContext={setContextItem} onDelete={setDeleteItem} />
-                ))}
-              </div>
-            ) : (
-              <div className="empty-state">
-                <strong>다음 작업이 없습니다</strong>
-                <span>작업을 추가해 오늘의 실행 순서를 만들어보세요.</span>
-                <button type="button" onClick={() => setIsComposerOpen(true)}>첫 작업 추가</button>
-              </div>
-            )}
-          </section>
-
-          <aside className="attention-panel">
-            <Queue title="내 확인 필요" items={groupedItems.review} onMove={handleMove} />
-            <Queue title="AI 작업 중" items={groupedItems.ai_running} onMove={handleMove} />
-            <Queue title="막힌 작업" items={groupedItems.blocked} onMove={handleMove} />
-          </aside>
-        </div>
-
-        {groupedItems.done.length > 0 && (
-          <details className="done-section">
-            <summary>완료한 작업 <span>{groupedItems.done.length}</span></summary>
-            <div className="task-list">
-              {groupedItems.done.map((item) => (
-                <TaskRow key={item.id} item={item} progress={sessionProgress[item.id]} onMove={handleMove} onRename={handleRename} onOpenContext={setContextItem} onDelete={setDeleteItem} />
-              ))}
-            </div>
-          </details>
-        )}
-          </>
-        ) : (
-          <TaskStatusView
-            status={activeTaskTab}
-            items={groupedItems[activeTaskTab]}
-            isLoading={isLoading}
-            onMove={handleMove}
-            onRename={handleRename}
-            onOpenContext={setContextItem}
-            onDelete={setDeleteItem}
-            sessionProgress={sessionProgress}
-            onAdd={() => setIsComposerOpen(true)}
-            sortMode={taskSortMode}
-            onSortModeChange={handleTaskSortMode}
-            onReorder={handleTaskReorder}
-          />
-        )}
+        <TaskBoard
+          items={groupedItems}
+          isLoading={isLoading}
+          onMove={handleMove}
+          onRename={handleRename}
+          onOpenContext={setContextItem}
+          onDelete={setDeleteItem}
+          sessionProgress={sessionProgress}
+          onAdd={() => setIsComposerOpen(true)}
+          sortMode={taskSortMode}
+          onSortModeChange={handleTaskSortMode}
+          onReorder={handleTaskReorder}
+        />
           </>
         )}
       </main>
@@ -798,7 +718,7 @@ function App() {
                 expectedSlotRevision: slot.revision,
                 expectedCurrentRevision: focusItem.revision,
                 expectedRequestedRevision: requested.revision,
-                releaseStatus: "todo",
+                releaseStatus: "ai_running",
                 ...values,
               });
               if (pendingTransition.openContextAfter) setContextItem(requested);
@@ -883,7 +803,6 @@ function App() {
           onOpenTask={(item) => {
             setIsQuickPanelOpen(false);
             setActiveSection("tasks");
-            setActiveTaskTab(item.status === "done" ? "done" : item.status === "todo" ? "todo" : "ai_running");
             setContextItem(item);
           }}
           onStartFocus={async (item) => {
@@ -895,26 +814,19 @@ function App() {
           onOpenChat={() => { setIsQuickPanelOpen(false); setActiveSection("chat"); }}
         />
       )}
-      {activeSection === "tasks" && <TaskAiFix items={items} onApplied={refresh} />}
-    </div>
-  );
-}
-
-function Summary({ label, value, accent = false }: { label: string; value: number; accent?: boolean }) {
-  return (
-    <div className="summary-item">
-      <span>{label}</span>
-      <strong className={accent && value > 0 ? "accent" : ""}>{value}</strong>
+      {activeSection === "tasks" && !focusItem && <TaskAiFix items={items} onApplied={refresh} />}
     </div>
   );
 }
 
 function StatusSuggestionRail({
+  isLocked,
   suggestions,
   items,
   onApply,
   onIgnore,
 }: {
+  isLocked: boolean;
   suggestions: StatusSuggestion[];
   items: WorkItem[];
   onApply: (id: string) => Promise<void>;
@@ -922,7 +834,7 @@ function StatusSuggestionRail({
 }) {
   const [pendingId, setPendingId] = useState<string | null>(null);
   return (
-    <section className="status-suggestion-rail" aria-label="상태 변경 제안">
+    <section className="status-suggestion-rail" aria-label="상태 변경 제안" inert={isLocked ? true : undefined} aria-hidden={isLocked ? true : undefined}>
       <header><div><Sparkles size={14} /><strong>확인할 상태 제안</strong></div><span>{suggestions.length}개</span></header>
       <div>
         {suggestions.slice(0, 4).map((suggestion) => {
@@ -954,6 +866,8 @@ function TaskRow({
   onDrop,
   onDragEnd,
   isDragging = false,
+  isFocusLocked = false,
+  boardCard = false,
 }: {
   item: WorkItem;
   progress?: WorkItemSessionProgress;
@@ -961,15 +875,23 @@ function TaskRow({
   onRename: (id: string, title: string) => Promise<void>;
   onOpenContext: (item: WorkItem) => void;
   onDelete: (item: WorkItem) => void;
-  onDragStart?: (event: DragEvent<HTMLButtonElement>, item: WorkItem) => void;
+  onDragStart?: (event: DragEvent<HTMLElement>, item: WorkItem) => void;
   onDragOver?: (event: DragEvent<HTMLElement>, item: WorkItem) => void;
   onDrop?: (event: DragEvent<HTMLElement>, item: WorkItem) => void;
   onDragEnd?: () => void;
   isDragging?: boolean;
+  isFocusLocked?: boolean;
+  boardCard?: boolean;
 }) {
   const [isEditing, setIsEditing] = useState(false);
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [title, setTitle] = useState(item.title);
   const [renameError, setRenameError] = useState<string | null>(null);
+  const cardRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (boardCard && item.status === "focus") cardRef.current?.focus();
+  }, [boardCard, item.id, item.status]);
 
   async function submitTitle(event: FormEvent) {
     event.preventDefault();
@@ -985,17 +907,57 @@ function TaskRow({
 
   return (
     <article
-      className={`task-row ${item.status === "review" ? "needs-review" : ""} ${onDragStart ? "is-sortable" : ""} ${isDragging ? "is-dragging" : ""}`}
+      ref={cardRef}
+      className={`task-row ${boardCard ? `task-board-card status-${item.status}` : ""} ${item.status === "review" ? "needs-review" : ""} ${onDragStart ? "is-sortable" : ""} ${isDragging ? "is-dragging" : ""} ${isFocusLocked ? "is-focus-locked" : ""}`}
+      draggable={Boolean(onDragStart) && item.status !== "focus" && !isFocusLocked}
+      inert={isFocusLocked ? true : undefined}
+      aria-hidden={isFocusLocked ? true : undefined}
+      tabIndex={boardCard ? 0 : undefined}
+      aria-label={boardCard ? `${item.title}, ${statusMeta[item.status].label}.${item.status === "focus" ? " 다른 화면이 잠겨 있습니다. 집중 종료 또는 완료를 선택할 수 있습니다." : " 드래그하거나 Alt와 좌우 방향키로 상태를 이동할 수 있습니다."}` : undefined}
+      onDragStart={onDragStart ? (event) => onDragStart(event, item) : undefined}
       onDragOver={onDragOver ? (event) => onDragOver(event, item) : undefined}
       onDrop={onDrop ? (event) => onDrop(event, item) : undefined}
+      onDragEnd={onDragEnd}
+      onKeyDown={boardCard ? (event) => {
+        if (item.status === "focus") return;
+        if (!event.altKey || (event.key !== "ArrowLeft" && event.key !== "ArrowRight")) return;
+        const currentIndex = taskBoardLanes.indexOf(taskBoardLaneForStatus(item.status));
+        const nextIndex = currentIndex + (event.key === "ArrowRight" ? 1 : -1);
+        const nextStatus = taskBoardLanes[nextIndex];
+        if (!nextStatus) return;
+        event.preventDefault();
+        void onMove(item.id, nextStatus);
+      } : undefined}
     >
-      {onDragStart && <button className="task-drag-handle" type="button" draggable aria-label={`${item.title} 순서 변경`} title="드래그해 순서 변경" onDragStart={(event) => onDragStart(event, item)} onDragEnd={onDragEnd}><GripVertical size={16} strokeWidth={1.7} /></button>}
-      <button
-        className="check-button"
-        type="button"
-        aria-label={`${item.title} 완료`}
-        onClick={() => onMove(item.id, "done")}
-      />
+      <header className="task-card-header">
+        <span className={`task-card-status ${item.status}`}><i aria-hidden="true" />{statusMeta[item.status].label}</span>
+        <div className="task-card-header-actions" onBlur={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setIsMenuOpen(false);
+        }}>
+          <span className="task-card-source">{item.source === "orbit" ? "LOCAL" : item.source.toUpperCase()}</span>
+          <button type="button" aria-label={`${item.title} 작업 메뉴`} aria-expanded={isMenuOpen} onClick={() => setIsMenuOpen((current) => !current)}><MoreHorizontal size={16} /></button>
+          {isMenuOpen && (
+            <div className="task-card-menu" role="menu">
+              <button type="button" role="menuitem" onClick={() => { setIsMenuOpen(false); onOpenContext(item); }}><Link2 size={13} /> 컨텍스트 보기</button>
+              <button type="button" role="menuitem" onClick={() => { setIsMenuOpen(false); setIsEditing(true); }}><Pencil size={13} /> 이름 수정</button>
+              {item.status === "ai_running" && <>
+                <div className="task-card-menu-divider" />
+                <button className="focus-action" type="button" role="menuitem" onClick={() => { setIsMenuOpen(false); void onMove(item.id, "focus"); }}><LockKeyhole size={13} /> 집중 시작</button>
+              </>}
+              {item.status !== "focus" && <>
+              <div className="task-card-menu-divider" />
+              {taskBoardLanes.filter((status) => status !== taskBoardLaneForStatus(item.status)).map((status) => (
+                <button type="button" role="menuitem" key={status} onClick={() => { setIsMenuOpen(false); void onMove(item.id, status); }}>
+                  <span className={`task-card-menu-dot ${status}`} /> {taskBoardLaneMeta[status].label}로 이동
+                </button>
+              ))}
+              </>}
+              {item.status !== "focus" && <><div className="task-card-menu-divider" />
+                <button className="danger" type="button" role="menuitem" onClick={() => { setIsMenuOpen(false); onDelete(item); }}><Trash2 size={13} /> 삭제</button></>}
+            </div>
+          )}
+        </div>
+      </header>
       <div className="task-copy">
         {isEditing ? (
           <form className="task-title-editor" onSubmit={submitTitle}>
@@ -1004,90 +966,34 @@ function TaskRow({
             <button type="button" aria-label="취소" onClick={() => { setTitle(item.title); setIsEditing(false); }}><X size={14} strokeWidth={2} aria-hidden="true" /></button>
           </form>
         ) : <strong onDoubleClick={() => setIsEditing(true)}>{item.title}</strong>}
-        <span>생성 {formatWorkItemCreatedAt(item.createdAt)} · {progress ? `AI 세션 ${progress.done}/${progress.total} 완료` : "AI 세션 연결 필요"}</span>
-        {(item.priority || item.targetAt) && <div className="task-planning-meta">
-          {item.priority && <small className={`task-priority-tag ${item.priority}`}>{item.priority.toUpperCase()}</small>}
-          {item.targetAt && <small className={`task-target-time ${new Date(item.targetAt).getTime() <= Date.now() ? "is-overdue" : ""}`}><AlarmClock size={12} strokeWidth={1.8} aria-hidden="true" />{formatWorkItemTargetAt(item.targetAt)}</small>}
-        </div>}
+        {(item.nextAction || item.goal) && <p className="task-card-summary">{item.nextAction || item.goal}</p>}
         {renameError && <small className="task-inline-error">{renameError}</small>}
       </div>
-      <button className="task-icon-action" type="button" aria-label={`${item.title} 이름 수정`} onClick={() => setIsEditing(true)}><Pencil size={14} strokeWidth={1.8} aria-hidden="true" /></button>
-      <button className="task-delete-action" type="button" aria-label={`${item.title} 삭제`} onClick={() => onDelete(item)}><Trash2 size={14} strokeWidth={1.8} aria-hidden="true" /></button>
-      <button className="task-link-action" type="button" title="연결된 컨텍스트 보기" aria-label={`${item.title} 연결된 컨텍스트 보기`} onClick={() => onOpenContext(item)}><Link2 size={14} strokeWidth={1.8} aria-hidden="true" /></button>
-      <label className="status-select">
-        <span className="sr-only">{item.title} 상태</span>
-        <select value={item.status} onChange={(event) => onMove(item.id, event.target.value as WorkItemStatus)}>
-          <option value="todo">할 일</option>
-          <option value="ai_running">진행 중</option>
-          <option value="done">완료</option>
-        </select>
-        <i aria-hidden="true"><ChevronDown size={13} strokeWidth={2} /></i>
-      </label>
+      <div className="task-card-meta">
+        <span>생성 {formatWorkItemCreatedAt(item.createdAt)}</span>
+        <span>{progress ? `AI 세션 ${progress.done}/${progress.total} 완료` : "연결된 AI 세션 없음"}</span>
+      </div>
+      {(item.priority || item.targetAt) && <div className="task-planning-meta">
+        {item.priority && <small className={`task-priority-tag ${item.priority}`}>{item.priority.toUpperCase()}</small>}
+        {item.targetAt && <small className={`task-target-time ${new Date(item.targetAt).getTime() <= Date.now() ? "is-overdue" : ""}`}><AlarmClock size={12} strokeWidth={1.8} aria-hidden="true" />{formatWorkItemTargetAt(item.targetAt)}</small>}
+      </div>}
+      {item.status === "focus" ? (
+        <footer className="task-card-focus-actions">
+          <button type="button" onClick={() => onOpenContext(item)}><Link2 size={13} /> 컨텍스트</button>
+          <button type="button" onClick={() => { void onMove(item.id, "ai_running"); }}>집중 종료</button>
+          <button className="primary-button" type="button" onClick={() => { void onMove(item.id, "done"); }}><Check size={13} /> 완료</button>
+        </footer>
+      ) : (
+        <footer className="task-card-footer">
+          <span className="task-card-drag-cue"><GripVertical size={14} strokeWidth={1.8} aria-hidden="true" /> 드래그해서 이동</span>
+          <span>⌥ ← →</span>
+        </footer>
+      )}
     </article>
   );
 }
 
-function Queue({
-  title,
-  items,
-  onMove,
-}: {
-  title: string;
-  items: WorkItem[];
-  onMove: (id: string, status: WorkItemStatus) => Promise<void>;
-}) {
-  return (
-    <section className="queue">
-      <div className="queue-title"><h3>{title}</h3><span>{items.length}</span></div>
-      {items.slice(0, 3).map((item) => (
-        <button type="button" className="queue-item" key={item.id} onClick={() => onMove(item.id, "focus")}>
-          <strong>{item.title}</strong>
-          <span>{item.nextAction || "집중 작업으로 가져오기"}</span>
-        </button>
-      ))}
-      {items.length === 0 && <p className="queue-empty">현재 항목 없음</p>}
-    </section>
-  );
-}
-
-function CheckpointEditor({ item, onSaved }: { item: WorkItem; onSaved: () => Promise<void> }) {
-  const [checkpoint, setCheckpoint] = useState(item.checkpoint || "");
-  const [nextAction, setNextAction] = useState(item.nextAction || "");
-  const [isEditing, setIsEditing] = useState(false);
-
-  async function save(event: FormEvent) {
-    event.preventDefault();
-    await updateWorkItemCheckpoint({
-      workItemId: item.id,
-      expectedRevision: item.revision,
-      checkpoint,
-      nextAction,
-    });
-    setIsEditing(false);
-    await onSaved();
-  }
-
-  if (!isEditing) {
-    return (
-      <button className="checkpoint-preview" type="button" onClick={() => setIsEditing(true)}>
-        <span>체크포인트</span>
-        <strong>{item.checkpoint || "현재까지 한 일을 기록하세요"}</strong>
-        <small>편집</small>
-      </button>
-    );
-  }
-
-  return (
-    <form className="checkpoint-form" onSubmit={save}>
-      <label>현재까지 한 것<input value={checkpoint} onChange={(event) => setCheckpoint(event.target.value)} autoFocus /></label>
-      <label>다음 행동<input value={nextAction} onChange={(event) => setNextAction(event.target.value)} /></label>
-      <button type="submit">저장</button>
-    </form>
-  );
-}
-
-function TaskStatusView({
-  status,
+function TaskBoard({
   items,
   isLoading,
   onMove,
@@ -1100,8 +1006,7 @@ function TaskStatusView({
   onSortModeChange,
   onReorder,
 }: {
-  status: Exclude<WorkItemStatus, "focus">;
-  items: WorkItem[];
+  items: Record<WorkItemStatus, WorkItem[]>;
   isLoading: boolean;
   onMove: (id: string, status: WorkItemStatus) => Promise<void>;
   onRename: (id: string, title: string) => Promise<void>;
@@ -1114,48 +1019,93 @@ function TaskStatusView({
   onReorder: (status: WorkItemStatus, orderedIds: string[]) => Promise<void>;
 }) {
   const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [draggingStatus, setDraggingStatus] = useState<TaskBoardLane | null>(null);
+  const [dragOverStatus, setDragOverStatus] = useState<TaskBoardLane | null>(null);
   const [isSortUnlockOpen, setIsSortUnlockOpen] = useState(false);
-  const sortedItems = useMemo(() => sortWorkItems(items, sortMode), [items, sortMode]);
-  const descriptions: Record<Exclude<WorkItemStatus, "focus">, string> = {
-    inbox: "아직 분류하지 않은 작업",
-    todo: "실행할 준비가 된 작업",
-    ai_running: "연결된 AI 작업 세션이 진행 중인 작업",
-    review: "AI 결과나 변경 내용을 확인해야 하는 작업",
-    blocked: "외부 답변이나 선행 작업을 기다리는 작업",
-    done: "완료한 작업",
-  };
+  const [announcement, setAnnouncement] = useState("");
+  const laneItems = useMemo(() => {
+    const next: Record<TaskBoardLane, WorkItem[]> = { todo: [], ai_running: [], done: [] };
+    workItemStatuses.forEach((status) => {
+      items[status].forEach((item) => next[taskBoardLaneForStatus(item.status)].push(item));
+    });
+    return next;
+  }, [items]);
+  const sortedItems = useMemo(() => Object.fromEntries(
+    taskBoardLanes.map((status) => {
+      const sorted = sortWorkItems(laneItems[status], sortMode);
+      if (status === "ai_running") {
+        sorted.sort((left, right) => Number(right.status === "focus") - Number(left.status === "focus"));
+      }
+      return [status, sorted];
+    }),
+  ) as Record<TaskBoardLane, WorkItem[]>, [laneItems, sortMode]);
+  const focusLocked = items.focus.length > 0;
 
-  function startDrag(event: DragEvent<HTMLButtonElement>, item: WorkItem) {
+  function startDrag(event: DragEvent<HTMLElement>, item: WorkItem) {
+    const origin = event.target as HTMLElement;
+    if (origin.closest("button, input, textarea, a")) {
+      event.preventDefault();
+      return;
+    }
     if (sortMode !== "manual") {
       event.preventDefault();
       setIsSortUnlockOpen(true);
       return;
     }
     setDraggingId(item.id);
+    setDraggingStatus(taskBoardLaneForStatus(item.status));
     event.dataTransfer.effectAllowed = "move";
     event.dataTransfer.setData("text/plain", item.id);
   }
 
-  function dropItem(event: DragEvent<HTMLElement>, target: WorkItem) {
+  async function dropItem(event: DragEvent<HTMLElement>, status: TaskBoardLane, target?: WorkItem) {
     event.preventDefault();
-    if (!draggingId || draggingId === target.id) return;
+    event.stopPropagation();
+    setDragOverStatus(null);
+    if (!draggingId || !draggingStatus) return;
+
+    const dragged = laneItems[draggingStatus].find((item) => item.id === draggingId);
+    if (!dragged) return;
+
+    if (draggingStatus !== status) {
+      setAnnouncement(`${dragged.title}을 ${taskBoardLaneMeta[status].label}로 이동합니다.`);
+      setDraggingId(null);
+      setDraggingStatus(null);
+      await onMove(dragged.id, status);
+      return;
+    }
+
+    if (!target || draggingId === target.id) {
+      setDraggingId(null);
+      setDraggingStatus(null);
+      return;
+    }
+
     const bounds = event.currentTarget.getBoundingClientRect();
     const placeAfter = event.clientY > bounds.top + bounds.height / 2;
-    const orderedIds = reorderWorkItemIds(sortedItems.map(({ id }) => id), draggingId, target.id, placeAfter);
+    const orderedIds = reorderWorkItemIds(sortedItems[status].map(({ id }) => id), draggingId, target.id, placeAfter);
     setDraggingId(null);
-    void onReorder(status, orderedIds);
+    setDraggingStatus(null);
+    setAnnouncement(`${dragged.title}의 순서를 변경했습니다.`);
+    await onReorder(dragged.status, orderedIds.filter((id) => laneItems[status].some((item) => item.id === id && item.status === dragged.status)));
+  }
+
+  function finishDrag() {
+    setDraggingId(null);
+    setDraggingStatus(null);
+    setDragOverStatus(null);
   }
 
   return (
     <>
-    <section className="task-status-page">
-      <header>
+    <section className={`task-board-page ${focusLocked ? "is-focus-locked" : ""}`} aria-label="Task 보드">
+      <header className="task-board-toolbar" inert={focusLocked ? true : undefined} aria-hidden={focusLocked ? true : undefined}>
         <div>
-          <h2>{statusMeta[status].label}</h2>
-          <p>{descriptions[status]}</p>
+          <h2>작업 보드</h2>
+          <p>카드를 세로로 확인하고 다른 열로 드래그해 상태를 바꿀 수 있어요.</p>
         </div>
         <div className="task-sort-actions">
-          <span>{items.length}개</span>
+          <span>{items.todo.length + items.focus.length + items.ai_running.length + items.review.length + items.blocked.length + items.inbox.length + items.done.length}개</span>
           <label>
             <span className="sr-only">Task 정렬 방식</span>
             <select value={sortMode} onChange={(event) => onSortModeChange(event.target.value as TaskSortMode)}>
@@ -1169,16 +1119,78 @@ function TaskStatusView({
 
       {isLoading ? (
         <div className="empty-state">작업을 불러오는 중…</div>
-      ) : items.length > 0 ? (
-        <div className="task-list status-task-list">
-          {sortedItems.map((item) => <TaskRow key={item.id} item={item} progress={sessionProgress[item.id]} onMove={onMove} onRename={onRename} onOpenContext={onOpenContext} onDelete={onDelete} onDragStart={startDrag} onDragOver={(event) => { if (draggingId) event.preventDefault(); }} onDrop={dropItem} onDragEnd={() => setDraggingId(null)} isDragging={draggingId === item.id} />)}
-        </div>
       ) : (
-        <div className="empty-state">
-          <strong>{statusMeta[status].label}에 작업이 없습니다</strong>
-          {status !== "done" && <button type="button" onClick={onAdd}>작업 추가</button>}
+        <div className="task-board-scroll">
+          <div className="task-board">
+            {taskBoardLanes.map((status) => {
+              const isLockedColumn = focusLocked && status !== "ai_running";
+              const isFocusColumn = focusLocked && status === "ai_running";
+              return (
+              <section
+                className={`task-board-column task-board-column-${status} ${isFocusColumn ? "is-focus-column" : ""} ${isLockedColumn ? "is-locked" : ""} ${dragOverStatus === status ? "is-drag-over" : ""}`}
+                key={status}
+                aria-labelledby={`task-column-${status}`}
+                inert={isLockedColumn ? true : undefined}
+                aria-hidden={isLockedColumn ? true : undefined}
+                onDragOver={(event) => {
+                  if (!draggingId || isLockedColumn) return;
+                  event.preventDefault();
+                  setDragOverStatus(status);
+                }}
+                onDragLeave={(event) => {
+                  if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragOverStatus(null);
+                }}
+                onDrop={(event) => { void dropItem(event, status); }}
+              >
+                <header className="task-board-column-header">
+                  <div>
+                    <span className={`task-board-status-dot ${status}`} aria-hidden="true" />
+                    <div>
+                      <h3 id={`task-column-${status}`}>{taskBoardLaneMeta[status].label}</h3>
+                      <p>{taskBoardLaneMeta[status].description}</p>
+                    </div>
+                  </div>
+                  <span className="task-board-count" aria-label={`${laneItems[status].length}개`}>{laneItems[status].length}</span>
+                </header>
+
+                {isFocusColumn && (
+                  <div className="focus-lock-banner" role="status"><LockKeyhole size={14} /> 현재 한 작업에 집중 중</div>
+                )}
+
+                <div className="task-board-list">
+                  {sortedItems[status].map((item) => (
+                    <TaskRow
+                      key={item.id}
+                      item={item}
+                      progress={sessionProgress[item.id]}
+                      onMove={onMove}
+                      onRename={onRename}
+                      onOpenContext={onOpenContext}
+                      onDelete={onDelete}
+                      onDragStart={startDrag}
+                      onDragOver={(event) => { if (draggingId) event.preventDefault(); }}
+                      onDrop={(event, target) => { void dropItem(event, status, target); }}
+                      onDragEnd={finishDrag}
+                      isDragging={draggingId === item.id}
+                      isFocusLocked={focusLocked && item.id !== items.focus[0]?.id}
+                      boardCard
+                    />
+                  ))}
+                  {sortedItems[status].length === 0 && (
+                    <div className="task-board-empty">
+                      <strong>{taskBoardLaneMeta[status].label} 작업이 없습니다</strong>
+                      <span>{status === "todo" ? "새 작업을 추가하거나 카드를 여기로 옮겨보세요." : "다른 열의 카드를 여기로 옮겨보세요."}</span>
+                      {status === "todo" && <button type="button" onClick={onAdd}><Plus size={13} /> 작업 추가</button>}
+                    </div>
+                  )}
+                </div>
+              </section>
+              );
+            })}
+          </div>
         </div>
       )}
+      <p className="sr-only" aria-live="polite">{focusLocked ? `${items.focus[0]?.title} 작업에 집중 중입니다. 다른 화면은 잠겼습니다.` : announcement}</p>
     </section>
     {isSortUnlockOpen && (
       <div className="modal-backdrop" onMouseDown={() => setIsSortUnlockOpen(false)}>
@@ -1246,6 +1258,7 @@ function TaskComposer({
 }) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
+  const [priority, setPriority] = useState<WorkItemPriority | null>(null);
   const [collectAiContext, setCollectAiContext] = useState(true);
   const [targetAt, setTargetAt] = useState("");
   const [isSaving, setIsSaving] = useState(false);
@@ -1266,6 +1279,7 @@ function TaskComposer({
         title: normalizedTitle,
         goal: normalizedDescription,
         status: "todo",
+        priority,
         targetAt: targetAt ? new Date(targetAt).toISOString() : null,
       });
       await onCreated({ id, title: normalizedTitle, description: normalizedDescription, collectAiContext });
@@ -1285,6 +1299,25 @@ function TaskComposer({
         </div>
         <label>작업 제목<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="예: GitHub OAuth callback 구현" autoFocus /></label>
         <label>Description <span>선택</span><textarea value={description} onChange={(event) => setDescription(event.target.value)} placeholder="상세 설명을 적으면 AI가 더 컨텍스트를 잘 가져와요!" rows={4} /></label>
+        <fieldset className="composer-priority">
+          <legend>우선순위 <span>선택</span></legend>
+          <div className="composer-priority-options">
+            {([
+              { value: null, label: "미지정", detail: "나중에 결정" },
+              { value: "p1", label: "P1", detail: "가장 먼저" },
+              { value: "p2", label: "P2", detail: "중요" },
+              { value: "p3", label: "P3", detail: "여유" },
+            ] as const).map((option) => (
+              <label
+                className={`composer-priority-option ${option.value ?? "none"}`}
+                key={option.label}
+              >
+                <input className="sr-only" type="radio" name="priority" checked={priority === option.value} onChange={() => setPriority(option.value)} />
+                <span><strong>{option.label}</strong><small>{option.detail}</small></span>
+              </label>
+            ))}
+          </div>
+        </fieldset>
         <label>목표 시간 <span>선택</span><input type="datetime-local" value={targetAt} onChange={(event) => setTargetAt(event.target.value)} /><small className="composer-field-help">이 시간까지 완료되지 않으면 Mac 알림을 한 번 보내드려요.</small></label>
         <label className="composer-ai-context-option">
           <input type="checkbox" checked={collectAiContext} onChange={(event) => setCollectAiContext(event.target.checked)} />
@@ -1348,6 +1381,13 @@ function TaskContextModal({ item, onClose, onChanged }: { item: WorkItem; onClos
   const [links, setLinks] = useState<WorkItemLink[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [isJiraSyncing, setIsJiraSyncing] = useState(false);
+  const [isJiraLinkEditorOpen, setIsJiraLinkEditorOpen] = useState(false);
+  const [jiraReference, setJiraReference] = useState("");
+  const [jiraIssues, setJiraIssues] = useState<JiraIssue[]>([]);
+  const [jiraTaskLinks, setJiraTaskLinks] = useState<JiraTaskLink[]>([]);
+  const [isLoadingJiraIssues, setIsLoadingJiraIssues] = useState(false);
+  const [isManualJiraReference, setIsManualJiraReference] = useState(false);
+  const [isCreatingJiraLink, setIsCreatingJiraLink] = useState(false);
   const [development, setDevelopment] = useState<JiraIssueDevelopment[]>([]);
   const [isAutoConnecting, setIsAutoConnecting] = useState(false);
   const [autoConnectMessage, setAutoConnectMessage] = useState<string | null>(null);
@@ -1364,7 +1404,13 @@ function TaskContextModal({ item, onClose, onChanged }: { item: WorkItem; onClos
 
   useEffect(() => {
     let cancelled = false;
+    setError(null);
     setDevelopment([]);
+    setIsJiraLinkEditorOpen(false);
+    setJiraReference("");
+    setJiraIssues([]);
+    setJiraTaskLinks([]);
+    setIsManualJiraReference(false);
     void refreshContext().then(async () => {
       const [nextSessions, nextLinks] = await Promise.all([listAiSessions(), listWorkItemLinks(item.id)]);
       const cwds = nextSessions
@@ -1461,8 +1507,104 @@ function TaskContextModal({ item, onClose, onChanged }: { item: WorkItem; onClos
     }
   }
 
+  async function addJiraLink(event: FormEvent) {
+    event.preventDefault();
+    const issueKey = extractJiraKey(jiraReference);
+    if (!issueKey) {
+      setError("CGKR-123 형식의 Jira 이슈 키 또는 Jira URL을 입력해주세요.");
+      return;
+    }
+
+    setIsCreatingJiraLink(true);
+    setError(null);
+    try {
+      const linkId = await createWorkItemLink(item.id, "jira", jiraReference);
+      setJiraReference("");
+      setIsJiraLinkEditorOpen(false);
+      await refreshContext();
+      await onChanged();
+
+      setIsJiraSyncing(true);
+      try {
+        const nextSessions = await listAiSessions();
+        const cwds = nextSessions
+          .filter((session) => session.linkedWorkItemId === item.id && session.cwd)
+          .map((session) => session.cwd as string);
+        const fresh = await syncJiraIssueDevelopment(item.id, linkId, issueKey, cwds);
+        setDevelopment([fresh]);
+        setLinks(await listWorkItemLinks(item.id));
+      } catch (cause) {
+        const message = cause instanceof Error ? cause.message : String(cause);
+        setError(`Jira 링크는 추가했지만 개발 정보 동기화에 실패했습니다. ${message}`);
+      } finally {
+        setIsJiraSyncing(false);
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setIsCreatingJiraLink(false);
+    }
+  }
+
+  async function openJiraLinkEditor() {
+    setError(null);
+    setJiraReference("");
+    setIsManualJiraReference(false);
+    setIsJiraLinkEditorOpen(true);
+    setIsLoadingJiraIssues(true);
+
+    let cachedIssues: JiraIssue[] = [];
+    try {
+      const [nextIssues, nextTaskLinks] = await Promise.all([
+        listCachedJiraIssues(),
+        listJiraTaskLinks(),
+      ]);
+      cachedIssues = nextIssues;
+      setJiraIssues(nextIssues);
+      setJiraTaskLinks(nextTaskLinks);
+
+      try {
+        await refreshAssignedJiraIssues();
+        const [refreshedIssues, refreshedTaskLinks] = await Promise.all([
+          listCachedJiraIssues(),
+          listJiraTaskLinks(),
+        ]);
+        setJiraIssues(refreshedIssues);
+        setJiraTaskLinks(refreshedTaskLinks);
+      } catch (cause) {
+        if (cachedIssues.length === 0) throw cause;
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setIsLoadingJiraIssues(false);
+    }
+  }
+
   const jiraLinks = links.filter((link) => link.kind === "jira");
   const slackLinks = links.filter((link) => link.kind === "slack");
+  const jiraTaskLinkByKey = new Map(jiraTaskLinks.map((link) => [link.issueKey.toUpperCase(), link]));
+  const jiraComboboxOptions: SearchComboboxOption[] = [
+    ...jiraIssues.map((issue) => {
+      const linkedTask = jiraTaskLinkByKey.get(issue.key.toUpperCase());
+      return {
+        value: issue.key,
+        label: issue.key,
+        description: issue.summary,
+        meta: linkedTask ? `${linkedTask.workItemTitle}에 연결됨` : issue.status,
+        keywords: `${issue.key} ${issue.summary} ${issue.status} ${issue.projectKey} ${issue.projectName}`,
+        disabled: Boolean(linkedTask),
+      };
+    }),
+    {
+      value: "__manual__",
+      label: "목록에 없음",
+      description: "Jira 키 또는 URL 직접 입력",
+      keywords: "직접 입력 manual",
+      alwaysVisible: true,
+    },
+  ];
+  const showManualJiraReference = isManualJiraReference || (!isLoadingJiraIssues && jiraIssues.length === 0);
 
   return (
     <div className="modal-backdrop task-context-backdrop" onMouseDown={onClose}>
@@ -1488,7 +1630,54 @@ function TaskContextModal({ item, onClose, onChanged }: { item: WorkItem; onClos
               </div>
             </div>
           ))}
-          {jiraLinks.length === 0 && <div className="context-empty-row">연결된 Jira 티켓이 없습니다.</div>}
+          {jiraLinks.length === 0 && !isJiraLinkEditorOpen && (
+            <div className="context-empty-row context-empty-action">
+              <span>연결된 Jira 티켓이 없습니다.</span>
+              <button type="button" onClick={() => void openJiraLinkEditor()}>
+                <Link2 size={13} strokeWidth={1.8} aria-hidden="true" /> 링크 추가
+              </button>
+            </div>
+          )}
+          {jiraLinks.length === 0 && isJiraLinkEditorOpen && (
+            <form className="context-jira-link-form" onSubmit={(event) => void addJiraLink(event)}>
+              <label htmlFor={`jira-issue-${item.id}`}>연결할 Jira 티켓</label>
+              <SearchCombobox
+                id={`jira-issue-${item.id}`}
+                value={isManualJiraReference ? "__manual__" : jiraReference}
+                options={jiraComboboxOptions}
+                placeholder={jiraIssues.length > 0 ? "티켓 번호 또는 제목 검색" : "동기화된 티켓이 없습니다"}
+                emptyMessage="일치하는 Jira 티켓이 없습니다."
+                loading={isLoadingJiraIssues}
+                onChange={(value) => {
+                  setError(null);
+                  if (value === "__manual__") {
+                    setJiraReference("");
+                    setIsManualJiraReference(true);
+                    return;
+                  }
+                  setIsManualJiraReference(false);
+                  setJiraReference(value);
+                }}
+                disabled={isCreatingJiraLink || isLoadingJiraIssues}
+                autoFocus
+              />
+              {showManualJiraReference && (
+                <input
+                  id={`jira-reference-${item.id}`}
+                  aria-label="Jira 이슈 키 또는 URL 직접 입력"
+                  value={jiraReference}
+                  onChange={(event) => { setJiraReference(event.target.value); setError(null); }}
+                  placeholder="CGKR-123 또는 Jira URL"
+                  disabled={isCreatingJiraLink}
+                />
+              )}
+              <div className="context-jira-link-actions">
+                <button type="button" onClick={() => { setJiraReference(""); setIsJiraLinkEditorOpen(false); setError(null); }} disabled={isCreatingJiraLink}>취소</button>
+                <button className="primary-button" type="submit" disabled={isCreatingJiraLink || !jiraReference.trim()}>{isCreatingJiraLink ? "연결 중…" : "연결"}</button>
+              </div>
+              <small>내게 할당된 Jira 티켓입니다. 연결하면 Jira 상태와 PR·커밋 정보를 함께 불러옵니다.</small>
+            </form>
+          )}
         </div>
 
         <div className="context-section">

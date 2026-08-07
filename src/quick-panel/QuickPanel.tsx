@@ -34,7 +34,7 @@ export default function QuickPanel({
                 <span><CheckSquare size={15} strokeWidth={1.8} /></span>
                 <div><strong>{item.title}</strong><small>{item.nextAction || item.checkpoint || statusLabel(item)}</small></div>
               </button>
-              {item.status !== "focus" && (
+              {item.status === "ai_running" && (
                 <button className="quick-panel-focus" type="button" onClick={() => void onStartFocus(item)} title="집중 시작">
                   <Target size={14} strokeWidth={1.8} /> 집중
                 </button>
@@ -58,7 +58,7 @@ export default function QuickPanel({
 function statusLabel(item: WorkItem) {
   if (item.status === "focus") return "지금 집중 중";
   if (item.status === "review") return "내 확인 필요";
-  if (item.status === "ai_running") return "AI 작업 진행 중";
+  if (item.status === "ai_running") return "진행 중";
   if (item.status === "blocked") return "막힌 작업";
   return "할 일";
 }

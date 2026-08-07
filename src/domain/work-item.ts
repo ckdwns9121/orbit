@@ -52,7 +52,7 @@ export const statusMeta: Record<
   WorkItemStatus,
   { label: string; shortLabel: string; order: number }
 > = {
-  focus: { label: "지금 집중 중", shortLabel: "집중", order: 0 },
+  focus: { label: "현재 집중 중", shortLabel: "집중", order: 0 },
   review: { label: "내 확인 필요", shortLabel: "확인", order: 1 },
   ai_running: { label: "진행 중", shortLabel: "진행", order: 2 },
   todo: { label: "할 일", shortLabel: "할 일", order: 3 },
