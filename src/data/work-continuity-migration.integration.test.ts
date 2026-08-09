@@ -238,6 +238,31 @@ describe("work continuity migrations", () => {
     });
     expectForeignKeysValid(database);
   });
+
+  test("upgrades a populated latest database to the context graph without changing canonical rows", () => {
+    const database = createDatabase(26);
+    insertWorkItem(database, "graph-task");
+    database.run(`INSERT INTO work_item_links(
+      id, work_item_id, kind, external_id, label, status, created_at
+    ) VALUES ('graph-link','graph-task','jira','ORB-27','ORB-27','linked','2026-08-09T00:00:00Z')`);
+    database.run(`INSERT INTO ai_sessions(
+      provider,session_id,title,modified_at_ms,acknowledged_at_ms,linked_work_item_id,discovered_at,completion_state
+    ) VALUES ('codex','graph-session','Graph session',1,1,'graph-task','2026-08-09T00:00:00Z','active')`);
+    const before = {
+      tasks: row<{ count: number }>(database, "SELECT COUNT(*) count FROM work_items").count,
+      links: row<{ count: number }>(database, "SELECT COUNT(*) count FROM work_item_links").count,
+      sessions: row<{ count: number }>(database, "SELECT COUNT(*) count FROM ai_sessions").count,
+    };
+    applyMigrations(database, 27, 28);
+    expect({
+      tasks: row<{ count: number }>(database, "SELECT COUNT(*) count FROM work_items").count,
+      links: row<{ count: number }>(database, "SELECT COUNT(*) count FROM work_item_links").count,
+      sessions: row<{ count: number }>(database, "SELECT COUNT(*) count FROM ai_sessions").count,
+    }).toEqual(before);
+    expect(row<{ revision: number }>(database, "SELECT revision FROM context_graph_source_state WHERE id=1"))
+      .toEqual({ revision: 0 });
+    expectForeignKeysValid(database);
+  });
 });
 
 for (const [currentId, requestedId] of [["a-current", "z-requested"], ["z-current", "a-requested"]] as const) {

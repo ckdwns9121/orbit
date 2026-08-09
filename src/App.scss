@@ -108,7 +108,6 @@ nav { display: grid; gap: 2px; }
 .nav-dot { width: 9px; height: 9px; border: 1px solid #b9b5b1; border-radius: 50%; }
 .nav-dot.filled { border-color: #635bdf; background: #635bdf; }
 .sync-status { display: flex; width: 100%; min-height: 34px; margin-top: auto; padding: 12px 7px 3px; align-items: center; color: var(--text-muted); border: 0; border-top: 1px solid var(--border); border-radius: 0; background: transparent; font-size: 11px; text-align: left; }
-.sync-status:hover { color: var(--text); background: transparent; }
 .sync-dot { display: inline-block; width: 7px; height: 7px; margin-right: 8px; border-radius: 50%; background: #45a35b; }
 .sync-dot.needs-attention { background: #d59a2d; box-shadow: 0 0 0 3px rgb(213 154 45 / 12%); }
 .sidebar-collapsed .traffic-lights span { visibility: hidden; }

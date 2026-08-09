@@ -245,7 +245,7 @@ export default function ChatPage() {
     <section className="chat-conversation">
       <ContextStatusPanel sources={contextSources} active={contextStarted} />
       {displayMessages.length === 0
-        ? <div className="chat-empty"><span>✦</span><h2>Orbit에게 물어보세요</h2><p>Task, Calendar, Jira, GitHub, Slack, Confluence 컨텍스트를 모아 답합니다.</p><div><button onClick={() => setQuestion("오늘 일정과 우선순위를 정리해줘")}>오늘 일정과 우선순위</button><button onClick={() => setQuestion("2024년 온콜 관련 문서와 대화를 찾아줘")}>문서·대화 검색</button></div></div>
+        ? <div className="chat-empty"><span>✦</span><h2>Orbit에게 물어보세요</h2><p>Task, Calendar, Jira, GitHub, Slack, Confluence를 연결한 Knowledge Graph로 답합니다.</p><div><button onClick={() => setQuestion("오늘 일정과 우선순위를 정리해줘")}>오늘 일정과 우선순위</button><button onClick={() => setQuestion("2024년 온콜 관련 문서와 대화를 찾아줘")}>문서·대화 검색</button></div></div>
         : <VirtualMessageList messages={displayMessages} onApproveTask={approveTask} onRejectTask={rejectTask} />}
       {error && <div className="chat-error">{error}</div>}
       <form className="chat-composer" onSubmit={submit}>

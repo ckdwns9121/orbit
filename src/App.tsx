@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type FormEvent } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
-  Activity,
   AlarmClock,
   Calendar,
   Check,
@@ -17,6 +16,7 @@ import {
   LockKeyhole,
   MessageCircle,
   MoreHorizontal,
+  Network,
   PanelLeftClose,
   PanelLeftOpen,
   Pencil,
@@ -86,6 +86,7 @@ import JiraTicketsPage from "./jira/JiraTicketsPage";
 import TaskContextDiscoveryModal from "./context/TaskContextDiscoveryModal";
 import ChatPage from "./chat/ChatPage";
 import DashboardPage from "./dashboard/DashboardPage";
+import GraphPage from "./graph/GraphPage";
 import ServiceIcon, { serviceIconForProvider } from "./components/ServiceIcon";
 import SearchCombobox, { type SearchComboboxOption } from "./components/SearchCombobox";
 import QuickPanel from "./quick-panel/QuickPanel";
@@ -109,14 +110,13 @@ import { InterruptionDialog, type InterruptionValues } from "./continuity/Contin
 import "./continuity/ContinuityDialogs.scss";
 import { completeWorkItem, type CompletionEvidence } from "./data/completion-repository";
 import { CompletionSheet } from "./continuity/ContinuityDialogs";
-import ContinuityPage, { type ContinuityTab } from "./continuity/ContinuityPage";
 import { listSourceSyncStates } from "./data/source-sync-repository";
 import type { SourceSyncState } from "./domain/work-continuity";
 import { saveSlackMessageToInbox } from "./data/inbox-repository";
 import { prepareEnabledCheckpointDraft, recordAutomationApproval } from "./data/automation-repository";
 import { recoverDurableJiraOutbox } from "./sources/jira-outbox-recovery";
 
-type PrimarySection = "dashboard" | "tasks" | "continuity" | "calendar" | "chat" | "sessions" | "jira" | "pull_requests" | "settings";
+type PrimarySection = "dashboard" | "tasks" | "calendar" | "chat" | "graph" | "sessions" | "jira" | "pull_requests" | "settings";
 
 const TASK_SORT_STORAGE_KEY = "orbit.task-sort";
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "orbit.sidebar-collapsed";
@@ -180,7 +180,6 @@ function App() {
   const [interruptionEvidence, setInterruptionEvidence] = useState<Array<{ label: string; url?: string }>>([]);
   const [interruptionDraft, setInterruptionDraft] = useState<{ checkpoint?: string; nextAction?: string }>({});
   const [activeSection, setActiveSection] = useState<PrimarySection>("dashboard");
-  const [continuityInitialTab, setContinuityInitialTab] = useState<ContinuityTab>("inbox");
   const [contextItem, setContextItem] = useState<WorkItem | null>(null);
   const [deleteItem, setDeleteItem] = useState<WorkItem | null>(null);
   const [sessionProgress, setSessionProgress] = useState<Record<string, WorkItemSessionProgress>>({});
@@ -502,11 +501,6 @@ function App() {
             Task
             <b>{items.filter((item) => item.status !== "done").length || ""}</b>
           </button>
-          <button className={`nav-item ${activeSection === "continuity" ? "active" : ""}`} type="button" title="업무 흐름" onClick={() => { setContinuityInitialTab("inbox"); setActiveSection("continuity"); }}>
-            <span className="nav-symbol"><Activity size={16} strokeWidth={1.75} aria-hidden="true" /></span>
-            업무 흐름
-            <b />
-          </button>
           <button
             className={`nav-item ${activeSection === "jira" ? "active" : ""}`}
             type="button"
@@ -525,6 +519,16 @@ function App() {
           >
             <span className="nav-symbol"><MessageCircle size={16} strokeWidth={1.75} aria-hidden="true" /></span>
             Chat
+            <b />
+          </button>
+          <button
+            className={`nav-item ${activeSection === "graph" ? "active" : ""}`}
+            type="button"
+            title="Graph"
+            onClick={() => setActiveSection("graph")}
+          >
+            <span className="nav-symbol"><Network size={16} strokeWidth={1.75} aria-hidden="true" /></span>
+            Graph
             <b />
           </button>
           <button
@@ -572,20 +576,20 @@ function App() {
           </button>
         </nav>
 
-        <button className="sync-status" type="button" onClick={() => { setContinuityInitialTab("diagnostics"); setActiveSection("continuity"); }}>
+        <div className="sync-status" aria-label="연동 상태">
           <span className={`sync-dot ${sourceSyncStates.some((state) => ["failed", "auth-required", "rate-limited", "partial", "stale"].includes(state.status)) ? "needs-attention" : ""}`} />
           {sourceSyncStates.length === 0
             ? "연동 상태 확인"
             : sourceSyncStates.some((state) => ["failed", "auth-required", "rate-limited"].includes(state.status))
               ? "연동 확인 필요"
               : `${sourceSyncStates.filter((state) => state.status === "fresh").length}/${sourceSyncStates.length}개 최신`}
-        </button>
+        </div>
       </aside>
 
       <main ref={workspaceRef} className="workspace">
         <header className="topbar" inert={focusItem ? true : undefined} aria-hidden={focusItem ? true : undefined}>
           <div>
-            <h1>{activeSection === "dashboard" ? "Dashboard" : activeSection === "tasks" ? "Task" : activeSection === "continuity" ? "업무 흐름" : activeSection === "calendar" ? "Calendar" : activeSection === "chat" ? "Chat" : activeSection === "sessions" ? "Workspace" : activeSection === "jira" ? "Jira Tickets" : activeSection === "pull_requests" ? "Pull Requests" : "Settings"}</h1>
+            <h1>{activeSection === "dashboard" ? "Dashboard" : activeSection === "tasks" ? "Task" : activeSection === "calendar" ? "Calendar" : activeSection === "chat" ? "Chat" : activeSection === "graph" ? "Graph" : activeSection === "sessions" ? "Workspace" : activeSection === "jira" ? "Jira Tickets" : activeSection === "pull_requests" ? "Pull Requests" : "Settings"}</h1>
             <span>{formatToday()}</span>
           </div>
           {activeSection === "tasks" && (
@@ -600,22 +604,13 @@ function App() {
             workItems={items}
             onResume={(item) => { void handleResume(item); }}
             onOpenContext={setContextItem}
-            onOpenContinuity={() => { setContinuityInitialTab("inbox"); setActiveSection("continuity"); }}
-          />
-        ) : activeSection === "continuity" ? (
-          <ContinuityPage
-            workItems={items}
-            initialTab={continuityInitialTab}
-            onChanged={refresh}
-            onOpenTask={(item) => {
-              setActiveSection("tasks");
-              setContextItem(item);
-            }}
           />
         ) : activeSection === "calendar" ? (
           <CalendarPage />
         ) : activeSection === "chat" ? (
           <ChatPage />
+        ) : activeSection === "graph" ? (
+          <GraphPage />
         ) : activeSection === "sessions" ? (
           <WorkspacePage
             workItems={items}
@@ -766,13 +761,8 @@ function App() {
               retrospective: values.retrospective,
               evidence: completionEvidence,
             });
-            const hasJira = completionEvidence.some((entry) => entry.source === "jira");
             setPendingCompletion(null);
             await refresh();
-            if (hasJira) {
-              setContinuityInitialTab("writeback");
-              setActiveSection("continuity");
-            }
           }}
         />
       )}

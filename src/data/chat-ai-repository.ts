@@ -4,13 +4,19 @@ import { taskProposalFromToolCall, type ChatTaskProposal, type CreateTaskToolCal
 import { listCalendarEvents } from "./calendar-event-repository";
 import { searchCompletedWork, type CompletedWorkSearchResult } from "./completion-repository";
 import { searchConfluencePagesWithProvenance } from "./confluence-page-repository";
+import {
+  ensureContextGraphIndex,
+  formatContextGraphResults,
+  searchContextGraph,
+} from "./context-graph-repository";
 import { listCachedPullRequests } from "./github-pull-request-repository";
 import { listCachedJiraIssues } from "./jira-issue-repository";
 import { queryCacheWarning, type QueryCacheProvenance } from "./query-cache-provenance";
+import { safeSyncErrorSummary } from "./source-sync-repository";
 import { searchSlackMessagesWithProvenance } from "./slack-message-repository";
 import { listWorkItems } from "./work-item-repository";
 
-export type ContextSourceId = "tasks" | "calendar" | "jira" | "github" | "slack" | "confluence";
+export type ContextSourceId = "tasks" | "calendar" | "jira" | "github" | "graph" | "slack" | "confluence";
 export type ContextSourceState = "pending" | "collecting" | "complete" | "unavailable" | "error";
 
 export interface ContextSourceStatus {
@@ -26,9 +32,16 @@ export const initialContextSources: ContextSourceStatus[] = [
   { id: "calendar", label: "Calendar", state: "pending", detail: "수집 대기" },
   { id: "jira", label: "Jira", state: "pending", detail: "탐색 대기" },
   { id: "github", label: "GitHub", state: "pending", detail: "탐색 대기" },
+  { id: "graph", label: "Knowledge Graph", state: "pending", detail: "인덱스 확인 대기" },
   { id: "slack", label: "Slack", state: "pending", detail: "메시지 탐색 대기" },
   { id: "confluence", label: "Confluence", state: "pending", detail: "문서 탐색 대기" },
 ];
+
+function contextSource(id: ContextSourceId): ContextSourceStatus {
+  const source = initialContextSources.find((item) => item.id === id);
+  if (!source) throw new Error(`Unknown context source: ${id}`);
+  return source;
+}
 
 interface ChatStreamEvent {
   kind: "started" | "delta" | "completed" | "cancelled";
@@ -160,12 +173,11 @@ export async function buildOrbitContext(
 ): Promise<string> {
   const from = new Date(now); from.setDate(from.getDate() - 7); from.setHours(0, 0, 0, 0);
   const to = new Date(now); to.setDate(to.getDate() + 30); to.setHours(23, 59, 59, 999);
-  const source = (id: ContextSourceId) => initialContextSources.find((item) => item.id === id)!;
   const [tasks, events, jira, pullRequests] = await Promise.all([
-    collectSource(source("tasks"), listWorkItems, onSource),
-    collectSource(source("calendar"), () => listCalendarEvents(from, to), onSource),
-    collectSource(source("jira"), listCachedJiraIssues, onSource),
-    collectSource(source("github"), listCachedPullRequests, onSource),
+    collectSource(contextSource("tasks"), listWorkItems, onSource),
+    collectSource(contextSource("calendar"), () => listCalendarEvents(from, to), onSource),
+    collectSource(contextSource("jira"), listCachedJiraIssues, onSource),
+    collectSource(contextSource("github"), listCachedPullRequests, onSource),
   ]);
   const sections = [
     `[기준 시각] ${now.toISOString()}`,
@@ -175,6 +187,44 @@ export async function buildOrbitContext(
     "[GitHub PR]\n" + pullRequests.slice(0, 40).map((pr) => `- ${pr.repository}#${pr.number} ${pr.title} | updated=${pr.updatedAt} | ${pr.url}`).join("\n"),
   ];
   return sections.join("\n\n").slice(0, 60_000);
+}
+
+type GraphGroundingPorts = {
+  ensureIndex: typeof ensureContextGraphIndex;
+  search: typeof searchContextGraph;
+  format: typeof formatContextGraphResults;
+};
+
+const graphGroundingPorts: GraphGroundingPorts = {
+  ensureIndex: ensureContextGraphIndex,
+  search: searchContextGraph,
+  format: formatContextGraphResults,
+};
+
+export function composeOrbitGrounding(...sections: string[]): string {
+  return sections.filter(Boolean).join("\n\n");
+}
+
+export async function buildKnowledgeGraphGrounding(
+  question: string,
+  onSource: (source: ContextSourceStatus) => void = () => undefined,
+  ports: GraphGroundingPorts = graphGroundingPorts,
+): Promise<string> {
+  const source = contextSource("graph");
+  onSource({ ...source, state: "collecting", detail: "관계 인덱스 확인 중…" });
+  try {
+    const index = await ports.ensureIndex();
+    onSource({ ...source, state: "collecting", detail: "관련 맥락 탐색 중…" });
+    const result = await ports.search(question);
+    const detail = index.rebuilt
+      ? `${result.nodes.length}건 연결 완료 · 인덱스 갱신됨`
+      : `${result.nodes.length}건 연결 완료`;
+    onSource({ ...source, state: "complete", count: result.nodes.length, detail });
+    return ports.format(result);
+  } catch (cause) {
+    onSource({ ...source, state: "error", detail: safeSyncErrorSummary(cause) || "그래프 탐색 실패" });
+    return "";
+  }
 }
 
 function normalizeIsoDate(value: unknown): string | null {
@@ -231,7 +281,7 @@ async function executeToolCall(
   onSource: (source: ContextSourceStatus) => void,
 ): Promise<{ call: Record<string, unknown>; output: Record<string, unknown> }> {
   const arguments_ = parseSearchToolArguments(call.arguments);
-  const source = initialContextSources.find((item) => item.id === (call.name === "search_slack_messages" ? "slack" : "confluence"))!;
+  const source = contextSource(call.name === "search_slack_messages" ? "slack" : "confluence");
   onSource({ ...source, state: "collecting", detail: `${arguments_.query || "날짜 조건"} 검색 중…` });
   let result: unknown;
   try {
@@ -297,7 +347,7 @@ export async function streamAnswerWithOrbitContext(
 ): Promise<StreamAnswer> {
   const conversation = messages.slice(-12).map((message) => ({ role: message.role, content: message.content }));
   const planningStatus = (id: "slack" | "confluence") => {
-    const source = initialContextSources.find((item) => item.id === id)!;
+    const source = contextSource(id);
     callbacks.onSource({ ...source, state: "collecting", detail: "AI가 검색 조건 분석 중…" });
   };
   planningStatus("slack");
@@ -305,7 +355,8 @@ export async function streamAnswerWithOrbitContext(
   const now = new Date();
   const baseContext = await buildOrbitContext(now, callbacks.onSource);
   const completionGrounding = await buildCompletedWorkGrounding(question);
-  const context = [baseContext, completionGrounding].filter(Boolean).join("\n\n");
+  const graphGrounding = await buildKnowledgeGraphGrounding(question, callbacks.onSource);
+  const context = composeOrbitGrounding(baseContext, completionGrounding, graphGrounding);
   const plan = await invoke<ChatToolPlan>("plan_chat_tools", {
     model,
     question,
@@ -322,7 +373,7 @@ export async function streamAnswerWithOrbitContext(
     : executeToolCall(call, callbacks.onSource)));
   for (const id of ["slack", "confluence"] as const) {
     if (!plan.calls.some((call) => call.name === (id === "slack" ? "search_slack_messages" : "search_confluence_pages"))) {
-      const source = initialContextSources.find((item) => item.id === id)!;
+      const source = contextSource(id);
       callbacks.onSource({ ...source, state: "complete", count: 0, detail: "이번 질문에는 검색 불필요" });
     }
   }

@@ -29,12 +29,10 @@ export default function DashboardPage({
   workItems,
   onResume,
   onOpenContext,
-  onOpenContinuity,
 }: {
   workItems: WorkItem[];
   onResume: (item: WorkItem) => void;
   onOpenContext: (item: WorkItem) => void;
-  onOpenContinuity: () => void;
 }) {
   const [snapshot, setSnapshot] = useState<DashboardSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -101,7 +99,6 @@ export default function DashboardPage({
           ))}
           {!continuity.forgotten.length && <div className="dashboard-queue-empty">7일 이상 멈춘 작업이 없습니다.</div>}
         </article>
-        <button className="dashboard-continuity-more" type="button" onClick={onOpenContinuity}>전체 업무 흐름 보기 <ArrowRight size={13} /></button>
       </section>
 
       <section className="dashboard-work-grid" aria-label="오늘의 업무 현황">

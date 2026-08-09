@@ -25,6 +25,39 @@ test("all migrations apply with foreign key integrity", () => {
   database.close();
 });
 
+test("context graph publishes complete immutable generations and safely prunes only old ones", () => {
+  const database = migratedDatabase();
+  database.query(`INSERT INTO context_graph_generations(
+    id, schema_version, source_fingerprint, started_at
+  ) VALUES ('g1', 1, 'fingerprint-1', '2026-08-09T01:00:00.000Z')`).run();
+  database.query(`INSERT INTO context_graph_nodes(
+    generation_id, id, node_type, source_type, source_id, label
+  ) VALUES ('g1', 'task:t1', 'task', 'task', 't1', 'Task 1')`).run();
+  database.query(`UPDATE context_graph_generations SET
+    status='ready', completed_at='2026-08-09T01:00:01.000Z', node_count=1, edge_count=0
+    WHERE id='g1'`).run();
+  expect(database.query("SELECT current_generation_id, node_count FROM context_graph_index_state WHERE id=1").get())
+    .toEqual({ current_generation_id: "g1", node_count: 1 });
+  expect(() => database.query("UPDATE context_graph_nodes SET label='changed' WHERE generation_id='g1'").run())
+    .toThrow("context_graph_generation_not_building");
+  expect(() => database.query("DELETE FROM context_graph_generations WHERE id='g1'").run())
+    .toThrow("context_graph_current_generation_cannot_be_pruned");
+
+  database.query(`INSERT INTO context_graph_generations(
+    id, schema_version, source_fingerprint, started_at
+  ) VALUES ('g2', 1, 'fingerprint-2', '2026-08-09T02:00:00.000Z')`).run();
+  database.query(`INSERT INTO context_graph_nodes(
+    generation_id, id, node_type, source_type, source_id, label
+  ) VALUES ('g2', 'task:t1', 'task', 'task', 't1', 'Task 1 updated')`).run();
+  database.query(`UPDATE context_graph_generations SET
+    status='ready', completed_at='2026-08-09T02:00:01.000Z', node_count=1, edge_count=0
+    WHERE id='g2'`).run();
+  database.query("DELETE FROM context_graph_generations WHERE id='g1'").run();
+  expect(database.query("SELECT id FROM context_graph_generations").all()).toEqual([{ id: "g2" }]);
+  expect(database.query("PRAGMA foreign_key_check").all()).toEqual([]);
+  database.close();
+});
+
 test("transition guards and activity append are atomic", () => {
   const database = migratedDatabase();
   insertTask(database, "a");

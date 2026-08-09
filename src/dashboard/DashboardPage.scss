@@ -7,7 +7,7 @@
 .dashboard-heading h2 { margin: 6px 0 5px; font-size: 25px; letter-spacing: -.6px; }
 .dashboard-heading p { margin: 0; color: var(--text-muted); font-size: 12px; }
 
-.dashboard-continuity { position: relative; display: grid; margin-bottom: 16px; grid-template-columns: minmax(0,1.45fr) repeat(2,minmax(210px,.8fr)); gap: 10px; }
+.dashboard-continuity { display: grid; margin-bottom: 16px; grid-template-columns: minmax(0,1.45fr) repeat(2,minmax(210px,.8fr)); gap: 10px; }
 .dashboard-resume-card,.dashboard-continuity-queue { min-width: 0; min-height: 164px; overflow: hidden; border: 1px solid var(--border); border-radius: $radius-medium; background: var(--surface); }
 .dashboard-resume-card { border-color: color-mix(in srgb,var(--accent) 34%,var(--border)); background: linear-gradient(135deg,var(--surface),color-mix(in srgb,var(--accent-soft) 60%,var(--surface))); }
 .dashboard-resume-card > header,.dashboard-continuity-queue > header { display: flex; min-height: 44px; padding: 0 14px; align-items: center; justify-content: space-between; gap: 8px; border-bottom: 1px solid var(--border); }
@@ -17,7 +17,6 @@
 .dashboard-resume-actions { display: flex; flex: 0 0 auto; gap: 6px; }.dashboard-resume-actions button { min-height: 30px; padding: 0 10px; font-size: 9px; }
 .dashboard-continuity-empty,.dashboard-queue-empty { display: grid; min-height: 118px; padding: 16px; place-items: center; color: var(--text-faint); font-size: 9px; line-height: 1.5; text-align: center; }.dashboard-queue-empty { min-height: 74px; }
 .dashboard-continuity-queue > button { display: grid; width: 100%; min-height: 51px; padding: 8px 13px; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: 8px; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; background: transparent; text-align: left; }.dashboard-continuity-queue > button:hover { background: var(--subtle); }.dashboard-continuity-queue > button > span { min-width: 0; }.dashboard-continuity-queue > button strong,.dashboard-continuity-queue > button small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.dashboard-continuity-queue > button strong { font-size: 10px; }.dashboard-continuity-queue > button small { margin-top: 4px; color: var(--text-muted); font-size: 8px; }.dashboard-continuity-queue > button > svg { color: var(--text-faint); }
-.dashboard-continuity-more { position: absolute; top: -29px; right: 0; display: flex; min-height: 25px; padding: 0; align-items: center; gap: 4px; color: var(--accent); border: 0; background: transparent; font-size: 9px; }.dashboard-continuity-more:hover { background: transparent; text-decoration: underline; }
 
 .dashboard-work-grid { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 12px; }
 .dashboard-panel,.dashboard-schedule { min-width: 0; overflow: hidden; border: 1px solid var(--border); border-radius: $radius-medium; background: var(--surface); }
