@@ -22,6 +22,39 @@ test("all migrations apply with foreign key integrity", () => {
   const database = migratedDatabase();
   expect(database.query("PRAGMA foreign_key_check").all()).toEqual([]);
   expect(database.query("SELECT revision FROM work_items").all()).toEqual([]);
+  expect(database.query("SELECT name, color FROM planner_categories ORDER BY sort_order").all()).toEqual([
+    { name: "업무", color: "#2F8FBF" },
+    { name: "할일", color: "#D94B68" },
+    { name: "공부", color: "#2B8C87" },
+  ]);
+  expect(database.query(`SELECT COUNT(*) AS count FROM sqlite_master
+    WHERE type='trigger' AND name LIKE 'daily_plan_entries_%'`).get()).toEqual({ count: 2 });
+  database.close();
+});
+
+test("planner categories and routines preserve Task ownership", () => {
+  const database = migratedDatabase();
+  insertTask(database, "planner-task");
+  database.query("UPDATE work_items SET category_id='category-work' WHERE id='planner-task'").run();
+  database.query(`INSERT INTO planner_routines(
+    id, title, category_id, weekdays, reminder_time, created_at, updated_at
+  ) VALUES ('routine-1','Daily review','category-work','1,2,3,4,5','09:30','2026-08-11','2026-08-11')`).run();
+  database.query(`INSERT INTO planner_routine_occurrences(
+    id, routine_id, plan_date, work_item_id, created_at
+  ) VALUES ('occurrence-1','routine-1','2026-08-11','planner-task','2026-08-11')`).run();
+  expect(database.query(`SELECT w.category_id, r.reminder_time, o.plan_date
+    FROM work_items w
+    JOIN planner_routine_occurrences o ON o.work_item_id=w.id
+    JOIN planner_routines r ON r.id=o.routine_id
+    WHERE w.id='planner-task'`).get()).toEqual({
+      category_id: "category-work",
+      reminder_time: "09:30",
+      plan_date: "2026-08-11",
+    });
+  database.query("DELETE FROM planner_routines WHERE id='routine-1'").run();
+  expect(database.query("SELECT routine_id, work_item_id FROM planner_routine_occurrences").get())
+    .toEqual({ routine_id: null, work_item_id: "planner-task" });
+  expect(database.query("PRAGMA foreign_key_check").all()).toEqual([]);
   database.close();
 });
 

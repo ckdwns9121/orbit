@@ -15,11 +15,17 @@ interface DailyPlanRow {
 }
 
 export async function listDailyPlan(planDate: string): Promise<DailyPlanEntry[]> {
+  return (await listDailyPlanRange(planDate, planDate));
+}
+
+export async function listDailyPlanRange(startDate: string, endDate: string): Promise<DailyPlanEntry[]> {
   const database = await getDatabase();
   const [rows, workItems] = await Promise.all([
     database.select<DailyPlanRow[]>(
-      "SELECT * FROM daily_plan_entries WHERE plan_date = $1 AND state IN ('planned', 'completed') ORDER BY sort_order, created_at",
-      [planDate],
+      `SELECT * FROM daily_plan_entries
+       WHERE plan_date BETWEEN $1 AND $2 AND state IN ('planned', 'completed')
+       ORDER BY plan_date, sort_order, created_at`,
+      [startDate, endDate],
     ),
     listWorkItems(),
   ]);

@@ -8,6 +8,7 @@ interface AppHeaderProps {
 }
 
 export default function AppHeader({ activeSection, isFocusLocked, onAddTask }: AppHeaderProps) {
+  if (activeSection === "dashboard") return null;
   return (
     <header className="topbar" inert={isFocusLocked ? true : undefined} aria-hidden={isFocusLocked ? true : undefined}>
       <div><h1>{sectionTitle[activeSection]}</h1><span>{formatToday()}</span></div>

@@ -1,388 +1,342 @@
-import { useEffect, useMemo, useState } from "react";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { useCallback, useEffect, useMemo, useState, type CSSProperties, type FormEvent, type ReactNode } from "react";
 import {
-  AlertTriangle,
-  ArrowRight,
+  AlarmClock,
   CalendarDays,
-  CheckCircle2,
+  Check,
   ChevronLeft,
   ChevronRight,
-  Clock3,
-  GitPullRequest,
-  GripVertical,
-  History,
-  MapPin,
+  Circle,
+  Focus,
+  MoreHorizontal,
   Plus,
-  RotateCcw,
-  UserCheck,
+  Repeat2,
+  Settings2,
+  Sparkles,
+  Trash2,
+  X,
 } from "lucide-react";
-import type { CalendarEvent } from "../../entities/work-context/model/calendar-event";
-import type { GitHubPullRequest } from "../../entities/work-context/model/github-pull-request";
-import { statusMeta, type WorkItem } from "../../entities/work-context/model/work-item";
+import { listCalendarEvents } from "../../entities/work-context/api/calendar-event-repository";
+import { addWorkItemToDailyPlan, listDailyPlanRange } from "../../entities/work-context/api/daily-plan-repository";
 import {
-  loadDashboardSnapshot,
-  type DashboardSnapshot,
-} from "../../entities/work-context/api/dashboard-repository";
-import { buildContinuityDashboard, formatRelativeTime } from "../../features/tasks/work-continuity";
+  createPlannerCategory,
+  createPlannerRoutine,
+  deletePlannerCategory,
+  deletePlannerRoutine,
+  listPlannerCategories,
+  listPlannerRoutines,
+  materializePlannerRoutines,
+} from "../../entities/work-context/api/planner-repository";
 import { createWorkItem } from "../../entities/work-context/api/work-item-repository";
-import { addWorkItemToDailyPlan, carryDailyPlanEntry, listDailyPlan, reorderDailyPlanEntries } from "../../entities/work-context/api/daily-plan-repository";
-import { addLocalDays, localDateKey, reorderDailyPlanEntries as moveDailyPlanEntryInList, type DailyPlanEntry } from "../../entities/work-context/model/daily-plan";
+import { isSameDay, type CalendarEvent } from "../../entities/work-context/model/calendar-event";
+import { localDateKey, type DailyPlanEntry } from "../../entities/work-context/model/daily-plan";
+import { monthGridDays, type PlannerCategory, type PlannerRoutine } from "../../entities/work-context/model/planner";
+import type { WorkItem } from "../../entities/work-context/model/work-item";
 import "./DashboardPage.scss";
 
-const dayLabel = new Intl.DateTimeFormat("ko-KR", { month: "long", day: "numeric", weekday: "short" });
-const eventTime = new Intl.DateTimeFormat("ko-KR", { hour: "2-digit", minute: "2-digit" });
+const monthLabel = new Intl.DateTimeFormat("ko-KR", { year: "numeric", month: "long" });
+const selectedDateLabel = new Intl.DateTimeFormat("ko-KR", { month: "long", day: "numeric", weekday: "long" });
+const timeLabel = new Intl.DateTimeFormat("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false });
+const weekdayLabels = ["월", "화", "수", "목", "금", "토", "일"];
+const routineWeekdays = ["일", "월", "화", "수", "목", "금", "토"];
+const categoryColors = ["#2F8FBF", "#D94B68", "#2B8C87", "#8B6DC7", "#D8893B", "#65804A"];
+
+type ManagerKind = "category" | "routine" | "reminder" | null;
 
 export default function DashboardPage({
   workItems,
   onResume,
+  onComplete,
   onOpenContext,
   onChanged,
 }: {
   workItems: WorkItem[];
   onResume: (item: WorkItem) => void;
+  onComplete: (item: WorkItem) => void;
   onOpenContext: (item: WorkItem) => void;
   onChanged: () => Promise<void>;
 }) {
-  const [snapshot, setSnapshot] = useState<DashboardSnapshot | null>(null);
+  const [month, setMonth] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1));
+  const [selectedDate, setSelectedDate] = useState(() => new Date());
+  const [entries, setEntries] = useState<DailyPlanEntry[]>([]);
+  const [events, setEvents] = useState<CalendarEvent[]>([]);
+  const [categories, setCategories] = useState<PlannerCategory[]>([]);
+  const [routines, setRoutines] = useState<PlannerRoutine[]>([]);
+  const [manager, setManager] = useState<ManagerKind>(null);
+  const [isManagerMenuOpen, setIsManagerMenuOpen] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [planDate, setPlanDate] = useState(() => localDateKey(new Date()));
-  const [planEntries, setPlanEntries] = useState<DailyPlanEntry[]>([]);
-  const [quickTitle, setQuickTitle] = useState("");
-  const [draggedEntryId, setDraggedEntryId] = useState<string | null>(null);
-  const [dropTargetId, setDropTargetId] = useState<string | null>(null);
-  const [planError, setPlanError] = useState<string | null>(null);
-  const [isSavingPlanOrder, setIsSavingPlanOrder] = useState(false);
-  const [isAddingQuickTask, setIsAddingQuickTask] = useState(false);
-  const completedCount = useMemo(() => planEntries.filter((entry) => entry.workItem.status === "done").length, [planEntries]);
+  const days = useMemo(() => monthGridDays(month), [month]);
+  const rangeStart = localDateKey(days[0]);
+  const rangeEnd = localDateKey(days[days.length - 1]);
 
-  async function refreshPlan(date = planDate) {
-    setPlanEntries(await listDailyPlan(date));
-    setDraggedEntryId(null);
-    setDropTargetId(null);
-  }
-
-  async function savePlanOrder(nextEntries: DailyPlanEntry[], previousEntries: DailyPlanEntry[]) {
-    setPlanEntries(nextEntries);
-    setPlanError(null);
-    setIsSavingPlanOrder(true);
-    try {
-      await reorderDailyPlanEntries(planDate, nextEntries.map((entry) => entry.id));
-    } catch (cause) {
-      setPlanEntries(previousEntries);
-      setPlanError(`순서를 저장하지 못했습니다. ${cause instanceof Error ? cause.message : String(cause)}`);
-      void refreshPlan();
-    } finally {
-      setIsSavingPlanOrder(false);
-    }
-  }
-
-  function movePlanEntry(entryId: string, targetId: string) {
-    if (isSavingPlanOrder || entryId === targetId) return;
-    const previousEntries = planEntries;
-    const nextEntries = moveDailyPlanEntryInList(previousEntries, entryId, targetId);
-    if (nextEntries === previousEntries) return;
-    void savePlanOrder(nextEntries, previousEntries);
-  }
-
-  function movePlanEntryByOffset(entryId: string, offset: number) {
-    const from = planEntries.findIndex((entry) => entry.id === entryId);
-    const to = Math.max(0, Math.min(planEntries.length - 1, from + offset));
-    if (from < 0 || from === to) return;
-    movePlanEntry(entryId, planEntries[to].id);
-  }
-
-  useEffect(() => {
-    setPlanError(null);
-    void refreshPlan().catch((cause) => setPlanError(`계획을 불러오지 못했습니다. ${cause instanceof Error ? cause.message : String(cause)}`));
-  }, [planDate]);
-
-  async function addQuickTask() {
-    const title = quickTitle.trim();
-    if (!title || isAddingQuickTask) return;
-    setIsAddingQuickTask(true);
-    setPlanError(null);
-    try {
-      const id = await createWorkItem({ title, status: "todo" });
-      await addWorkItemToDailyPlan(id, planDate);
-      setQuickTitle("");
-      await Promise.all([refreshPlan(), onChanged()]);
-    } catch (cause) {
-      setPlanError(`할 일을 추가하지 못했습니다. ${cause instanceof Error ? cause.message : String(cause)}`);
-    } finally {
-      setIsAddingQuickTask(false);
-    }
-  }
-
-  useEffect(() => {
-    let active = true;
+  const refresh = useCallback(async () => {
     setError(null);
-    void loadDashboardSnapshot()
-      .then((next) => active && setSnapshot(next))
-      .catch((cause) => active && setError(String(cause)));
-    return () => { active = false; };
-  }, []);
+    try {
+      const [nextCategories, nextRoutines] = await Promise.all([listPlannerCategories(), listPlannerRoutines()]);
+      await materializePlannerRoutines(rangeStart, rangeEnd);
+      const [nextEntries, nextEvents] = await Promise.all([
+        listDailyPlanRange(rangeStart, rangeEnd),
+        listCalendarEvents(days[0], new Date(days[days.length - 1].getFullYear(), days[days.length - 1].getMonth(), days[days.length - 1].getDate() + 1)),
+      ]);
+      setCategories(nextCategories);
+      setRoutines(nextRoutines);
+      setEntries(nextEntries);
+      setEvents(nextEvents);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setIsLoading(false);
+    }
+  }, [rangeEnd, rangeStart]);
 
-  if (error) return <div className="dashboard-error">대시보드를 불러오지 못했습니다. {error}</div>;
-  if (!snapshot) return <div className="dashboard-loading">오늘의 업무를 불러오는 중…</div>;
-  const continuity = buildContinuityDashboard(workItems);
+  useEffect(() => {
+    setIsLoading(true);
+    void refresh();
+  }, [refresh]);
+
+  const selectedKey = localDateKey(selectedDate);
+  const selectedEntries = entries.filter((entry) => entry.planDate === selectedKey);
+  const selectedEvents = events.filter((event) => isSameDay(new Date(event.startAt), selectedDate));
+  const categoryById = new Map(categories.map((category) => [category.id, category]));
+  const selectedCompleted = selectedEntries.filter((entry) => entry.workItem.status === "done").length;
+  const reminders = workItems
+    .filter((item) => item.targetAt && item.status !== "done")
+    .sort((a, b) => new Date(a.targetAt!).getTime() - new Date(b.targetAt!).getTime());
+
+  function changeMonth(offset: number) {
+    const next = new Date(month.getFullYear(), month.getMonth() + offset, 1);
+    setMonth(next);
+    setSelectedDate(next);
+  }
+
+  function selectToday() {
+    const today = new Date();
+    setMonth(new Date(today.getFullYear(), today.getMonth(), 1));
+    setSelectedDate(today);
+  }
+
+  async function createPlannedTask(input: { title: string; categoryId: string | null; targetAt: string | null }) {
+    const id = await createWorkItem({ title: input.title, status: "todo", categoryId: input.categoryId, targetAt: input.targetAt });
+    await addWorkItemToDailyPlan(id, selectedKey);
+    await Promise.all([refresh(), onChanged()]);
+  }
 
   return (
-    <main className="dashboard-page">
-      <header className="dashboard-heading">
-        <span className="dashboard-eyebrow">TODAY</span>
-        <h2>오늘의 업무</h2>
-        <p>{dayLabel.format(new Date())} · 먼저 확인해야 할 작업과 리뷰를 모았어요.</p>
+    <main className="planner-page">
+      <header className="planner-heading">
+        <div className="planner-profile-mark"><Sparkles size={20} aria-hidden="true" /></div>
+        <div className="planner-heading-copy">
+          <span>ORBIT PLANNER</span>
+          <h2>이번 달, 해야 할 일만 선명하게</h2>
+          <p>업무와 생활을 계획하고 필요한 순간에만 Jira·Slack·AI 컨텍스트를 여세요.</p>
+        </div>
+        <div className="planner-heading-actions">
+          <button type="button" onClick={selectToday}>오늘</button>
+          <div className="planner-manager-anchor">
+            <button type="button" aria-label="플래너 관리 메뉴" aria-expanded={isManagerMenuOpen} onClick={() => setIsManagerMenuOpen((value) => !value)}><MoreHorizontal size={19} /></button>
+            {isManagerMenuOpen && (
+              <div className="planner-manager-menu">
+                <button type="button" onClick={() => { setManager("category"); setIsManagerMenuOpen(false); }}><Settings2 size={15} />카테고리 관리</button>
+                <button type="button" onClick={() => { setManager("routine"); setIsManagerMenuOpen(false); }}><Repeat2 size={15} />루틴 관리</button>
+                <button type="button" onClick={() => { setManager("reminder"); setIsManagerMenuOpen(false); }}><AlarmClock size={15} />리마인더 관리</button>
+              </div>
+            )}
+          </div>
+        </div>
       </header>
 
-      <section className="daily-planner" aria-label="일일 계획">
-        <header className="daily-planner-header">
-          <button type="button" aria-label="이전 날짜" disabled={isSavingPlanOrder} onClick={() => setPlanDate(addLocalDays(planDate, -1))}><ChevronLeft size={17} /></button>
-          <div>
-            <strong>{dayLabel.format(new Date(`${planDate}T12:00:00`))}</strong>
-            <span>{completedCount}/{planEntries.length} 완료</span>
-          </div>
-          <button type="button" aria-label="다음 날짜" disabled={isSavingPlanOrder} onClick={() => setPlanDate(addLocalDays(planDate, 1))}><ChevronRight size={17} /></button>
-        </header>
-        <div className="daily-planner-progress" role="progressbar" aria-label="일일 계획 완료율" aria-valuemin={0} aria-valuemax={planEntries.length} aria-valuenow={completedCount}><i style={{ width: `${planEntries.length ? (completedCount / planEntries.length) * 100 : 0}%` }} /></div>
-        <form className="daily-quick-add" onSubmit={(event) => { event.preventDefault(); void addQuickTask(); }}>
-          <Plus size={16} />
-          <input aria-label="일일 계획에 할 일 추가" value={quickTitle} onChange={(event) => setQuickTitle(event.target.value)} placeholder="이 날짜에 할 일을 빠르게 추가하세요" />
-          <button type="submit" disabled={!quickTitle.trim() || isAddingQuickTask}>{isAddingQuickTask ? "추가 중…" : "추가"}</button>
-        </form>
-        <p className="daily-plan-hint">카드를 끌어 순서를 바꾸거나, 핸들에 포커스한 뒤 ⌥ + ↑ / ↓ 로 이동할 수 있어요.</p>
-        <div className="daily-plan-list">
-          {planEntries.map((entry) => (
-            <article
-              className={`daily-plan-row ${entry.workItem.status === "done" ? "is-done" : ""} ${draggedEntryId === entry.id ? "is-dragging" : ""} ${dropTargetId === entry.id ? "is-drop-target" : ""}`}
-              key={entry.id}
-              onDragOver={(event) => { event.preventDefault(); if (draggedEntryId && draggedEntryId !== entry.id) setDropTargetId(entry.id); }}
-              onDragLeave={(event) => {
-                if (!(event.currentTarget as HTMLElement).contains(event.relatedTarget as Node | null) && dropTargetId === entry.id) {
-                  setDropTargetId(null);
-                }
-              }}
-              onDrop={(event) => {
-                event.preventDefault();
-                if (draggedEntryId) movePlanEntry(draggedEntryId, entry.id);
-                setDraggedEntryId(null);
-                setDropTargetId(null);
-              }}
-            >
-              <button
-                className="daily-plan-drag-handle"
-                type="button"
-                draggable={planEntries.length > 1 && !isSavingPlanOrder}
-                disabled={isSavingPlanOrder}
-                aria-label={`${entry.workItem.title} 순서 변경. Alt와 위아래 화살표로 이동`}
-                onDragStart={(event) => {
-                  event.dataTransfer.effectAllowed = "move";
-                  event.dataTransfer.setData("text/plain", entry.id);
-                  setDraggedEntryId(entry.id);
-                }}
-                onDragEnd={() => { setDraggedEntryId(null); setDropTargetId(null); }}
-                onKeyDown={(event) => {
-                  if (!event.altKey || (event.key !== "ArrowUp" && event.key !== "ArrowDown")) return;
-                  event.preventDefault();
-                  movePlanEntryByOffset(entry.id, event.key === "ArrowUp" ? -1 : 1);
-                }}
-              ><GripVertical size={15} aria-hidden="true" /></button>
-              <button className="daily-plan-check" type="button" aria-label={`${entry.workItem.title} 열기`} onClick={() => onOpenContext(entry.workItem)}>{entry.workItem.status === "done" ? <CheckCircle2 size={17} /> : <span />}</button>
-              <button className="daily-plan-copy" type="button" onClick={() => onOpenContext(entry.workItem)}><strong>{entry.workItem.title}</strong><small>{entry.workItem.nextAction || statusMeta[entry.workItem.status].label}</small></button>
-              {entry.workItem.status !== "done" && <button type="button" onClick={() => onResume(entry.workItem)}>시작</button>}
-              {entry.workItem.status !== "done" && <button type="button" onClick={() => {
-                setPlanError(null);
-                void carryDailyPlanEntry(entry, addLocalDays(planDate, 1))
-                  .then(() => refreshPlan())
-                  .catch((cause) => setPlanError(`내일로 옮기지 못했습니다. ${cause instanceof Error ? cause.message : String(cause)}`));
-              }}>내일</button>}
-            </article>
-          ))}
-          {!planEntries.length && <div className="dashboard-empty">이 날짜에 계획한 작업이 없습니다.</div>}
-        </div>
-        {isSavingPlanOrder && !planError && <p className="daily-plan-hint" aria-live="polite">순서를 저장하는 중…</p>}
-        {planError && <p className="daily-plan-error" role="alert">{planError}</p>}
-      </section>
+      {error && <div className="planner-error" role="alert">플래너를 불러오지 못했습니다. {error}</div>}
 
-      <section className="dashboard-continuity" aria-label="작업 이어가기">
-        <article className="dashboard-resume-card">
-          <header><div><RotateCcw size={15} /><strong>이어서 시작</strong></div><span>{continuity.resume ? formatRelativeTime(continuity.resume.pausedAt || continuity.resume.lastFocusedAt || continuity.resume.updatedAt) : "추천"}</span></header>
-          {continuity.resume ? (
-            <div className="dashboard-resume-body">
-              <div>
-                <h3>{continuity.resume.title}</h3>
-                <p>{continuity.resume.checkpoint || "마지막 체크포인트가 없습니다."}</p>
-                <small><ArrowRight size={12} /> {continuity.resume.nextAction || "재개 후 첫 행동을 정해보세요."}</small>
-              </div>
-              <div className="dashboard-resume-actions">
-                <button type="button" onClick={() => onOpenContext(continuity.resume!)}>근거 보기</button>
-                <button className="primary-button" type="button" onClick={() => onResume(continuity.resume!)}>재개</button>
-              </div>
+      <div className="planner-layout">
+        <section className="planner-calendar" aria-label={`${monthLabel.format(month)} 월간 계획`}>
+          <header className="planner-month-heading">
+            <div>
+              <button type="button" aria-label="이전 달" onClick={() => changeMonth(-1)}><ChevronLeft size={18} /></button>
+              <h3>{monthLabel.format(month)}</h3>
+              <button type="button" aria-label="다음 달" onClick={() => changeMonth(1)}><ChevronRight size={18} /></button>
             </div>
-          ) : (
-            <div className="dashboard-continuity-empty">멈춰 둔 작업이 없습니다. 오늘 작업에서 다음 실행 항목을 선택해보세요.</div>
-          )}
-        </article>
-
-        <article className="dashboard-continuity-queue">
-          <header><div><AlertTriangle size={15} /><strong>막힌 작업 재점검</strong></div><span>{continuity.blocked.length}개</span></header>
-          {continuity.blocked.slice(0, 2).map((item) => (
-            <button type="button" key={item.id} onClick={() => onOpenContext(item)}>
-              <span><strong>{item.title}</strong><small>{item.blockedReason || "막힌 이유가 기록되지 않았습니다."}</small></span>
-              <ArrowRight size={13} />
-            </button>
-          ))}
-          {!continuity.blocked.length && <div className="dashboard-queue-empty">지금 재점검할 막힌 작업이 없습니다.</div>}
-        </article>
-
-        <article className="dashboard-continuity-queue">
-          <header><div><History size={15} /><strong>방치 작업</strong></div><span>{continuity.forgotten.length}개</span></header>
-          {continuity.forgotten.slice(0, 2).map((item) => (
-            <button type="button" key={item.id} onClick={() => onOpenContext(item)}>
-              <span><strong>{item.title}</strong><small>{formatRelativeTime(item.updatedAt)} 이후 진전 없음</small></span>
-              <ArrowRight size={13} />
-            </button>
-          ))}
-          {!continuity.forgotten.length && <div className="dashboard-queue-empty">7일 이상 멈춘 작업이 없습니다.</div>}
-        </article>
-      </section>
-
-      <section className="dashboard-work-grid" aria-label="오늘의 업무 현황">
-        <TaskPanel
-          icon={Clock3}
-          title="오늘 작업"
-          meta={`${snapshot.todayTasks.length}개`}
-          tasks={snapshot.todayTasks}
-          empty="오늘 예정된 작업이 없습니다."
-        />
-        <TaskPanel
-          icon={CheckCircle2}
-          title="어제 한 작업"
-          meta={`${snapshot.yesterdayTasks.length}개 완료`}
-          tasks={snapshot.yesterdayTasks}
-          empty="어제 완료한 작업이 없습니다."
-          completed
-        />
-        <PullRequestPanel
-          icon={GitPullRequest}
-          title="열린 PR"
-          meta={`${snapshot.openPullRequests.length}개`}
-          pullRequests={snapshot.openPullRequests}
-          empty="내가 올린 열린 PR이 없습니다."
-        />
-        <PullRequestPanel
-          icon={UserCheck}
-          title="내 리뷰 대기 PR"
-          meta={`${snapshot.reviewRequests.length}개`}
-          pullRequests={snapshot.reviewRequests}
-          empty="내 리뷰를 기다리는 PR이 없습니다."
-          review
-        />
-      </section>
-
-      <section className="dashboard-schedule" aria-label="오늘 일정">
-        <PanelHeading icon={CalendarDays} title="오늘 일정" meta={`${snapshot.todayEvents.length}개`} />
-        {snapshot.todayEvents.length ? (
-          <div className="dashboard-event-list">
-            {snapshot.todayEvents.map((event) => <EventRow event={event} key={event.id} />)}
+            <span>{entries.filter((entry) => entry.workItem.status === "done").length}개 완료</span>
+          </header>
+          <div className="planner-weekdays" aria-hidden="true">
+            {weekdayLabels.map((label) => <span key={label}>{label}</span>)}
           </div>
-        ) : <Empty text="오늘 등록된 일정이 없습니다." />}
-      </section>
+          <div className="planner-month-grid">
+            {days.map((day) => {
+              const key = localDateKey(day);
+              const dayEntries = entries.filter((entry) => entry.planDate === key);
+              const dayEvents = events.filter((event) => isSameDay(new Date(event.startAt), day));
+              const isCurrentMonth = day.getMonth() === month.getMonth();
+              const isToday = isSameDay(day, new Date());
+              const isSelected = isSameDay(day, selectedDate);
+              return (
+                <button
+                  className={`planner-day ${isCurrentMonth ? "" : "is-outside"} ${isToday ? "is-today" : ""} ${isSelected ? "is-selected" : ""}`}
+                  type="button"
+                  key={key}
+                  aria-label={`${selectedDateLabel.format(day)}, 할 일 ${dayEntries.length}개, 일정 ${dayEvents.length}개`}
+                  onClick={() => { setSelectedDate(day); if (!isCurrentMonth) setMonth(new Date(day.getFullYear(), day.getMonth(), 1)); }}
+                >
+                  <span className="planner-day-number">{day.getDate()}</span>
+                  <div className="planner-day-items">
+                    {dayEntries.slice(0, 3).map((entry) => {
+                      const category = entry.workItem.categoryId ? categoryById.get(entry.workItem.categoryId) : undefined;
+                      return <span className={entry.workItem.status === "done" ? "is-done" : ""} key={entry.id} style={{ "--item-color": category?.color || "var(--accent)" } as CSSProperties}><i />{entry.workItem.title}</span>;
+                    })}
+                    {dayEvents.slice(0, Math.max(0, 3 - dayEntries.length)).map((event) => <span className="is-event" key={event.id}><i />{event.title}</span>)}
+                    {dayEntries.length + dayEvents.length > 3 && <small>+{dayEntries.length + dayEvents.length - 3}</small>}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+
+        <aside className="planner-day-panel" aria-label={`${selectedDateLabel.format(selectedDate)} 계획`}>
+          <div className="planner-category-strip">
+            {categories.map((category) => (
+              <span key={category.id} style={{ "--category-color": category.color } as CSSProperties}><i />{category.name}</span>
+            ))}
+            <button type="button" aria-label="카테고리 추가" onClick={() => setManager("category")}><Plus size={14} /></button>
+          </div>
+
+          <header className="planner-selected-heading">
+            <div><span>{selectedDateLabel.format(selectedDate)}</span><h3>{selectedEntries.length ? `${selectedEntries.length}개의 계획` : "비어 있는 하루"}</h3></div>
+            <em>{selectedEntries.length ? `${selectedCompleted}/${selectedEntries.length}` : "0"}</em>
+          </header>
+
+          <QuickTaskForm categories={categories} selectedDate={selectedDate} onSubmit={createPlannedTask} />
+
+          <div className="planner-task-list">
+            {selectedEntries.map((entry) => {
+              const category = entry.workItem.categoryId ? categoryById.get(entry.workItem.categoryId) : undefined;
+              return (
+                <article className={entry.workItem.status === "done" ? "is-done" : ""} key={entry.id} style={{ "--category-color": category?.color || "var(--accent)" } as CSSProperties}>
+                  <button className="planner-task-check" type="button" disabled={entry.workItem.status === "done"} aria-label={entry.workItem.status === "done" ? `${entry.workItem.title} 완료됨` : `${entry.workItem.title} 완료`} onClick={() => onComplete(entry.workItem)}>{entry.workItem.status === "done" ? <Check size={14} /> : <Circle size={14} />}</button>
+                  <button className="planner-task-copy" type="button" onClick={() => onOpenContext(entry.workItem)}>
+                    <strong>{entry.workItem.title}</strong>
+                    <small>{category?.name || "미분류"}{entry.workItem.targetAt ? ` · ${timeLabel.format(new Date(entry.workItem.targetAt))} 알림` : ""}</small>
+                  </button>
+                  {entry.workItem.status !== "done" && <button className="planner-focus-button" type="button" onClick={() => onResume(entry.workItem)}><Focus size={14} /><span>집중</span></button>}
+                </article>
+              );
+            })}
+            {!isLoading && selectedEntries.length === 0 && <div className="planner-empty"><CalendarDays size={25} /><strong>아직 계획이 없어요</strong><span>위 입력창에서 이 날짜의 첫 할 일을 추가하세요.</span></div>}
+          </div>
+
+          {selectedEvents.length > 0 && (
+            <section className="planner-events">
+              <header><strong>일정</strong><span>{selectedEvents.length}</span></header>
+              {selectedEvents.map((event) => <div key={event.id}><i /><span><strong>{event.title}</strong><small>{event.allDay ? "종일" : timeLabel.format(new Date(event.startAt))}{event.location ? ` · ${event.location}` : ""}</small></span></div>)}
+            </section>
+          )}
+
+          <div className="planner-context-note"><Sparkles size={15} /><span><strong>업무 컨텍스트는 작업 안에</strong><small>작업을 열면 Jira, PR, Slack, Codex·Claude 세션을 연결할 수 있어요.</small></span></div>
+        </aside>
+      </div>
+
+      {manager === "category" && <CategoryManager categories={categories} onClose={() => setManager(null)} onChanged={refresh} />}
+      {manager === "routine" && <RoutineManager categories={categories} routines={routines} rangeStart={rangeStart} rangeEnd={rangeEnd} onClose={() => setManager(null)} onChanged={async () => { await refresh(); await onChanged(); }} />}
+      {manager === "reminder" && <ReminderManager reminders={reminders} onOpen={(item) => { setManager(null); onOpenContext(item); }} onClose={() => setManager(null)} />}
     </main>
   );
 }
 
-function TaskPanel({
-  icon: Icon,
-  title,
-  meta,
-  tasks,
-  empty,
-  completed = false,
-}: {
-  icon: typeof Clock3;
-  title: string;
-  meta: string;
-  tasks: WorkItem[];
-  empty: string;
-  completed?: boolean;
+function QuickTaskForm({ categories, selectedDate, onSubmit }: {
+  categories: PlannerCategory[];
+  selectedDate: Date;
+  onSubmit: (input: { title: string; categoryId: string | null; targetAt: string | null }) => Promise<void>;
 }) {
-  return (
-    <article className="dashboard-panel dashboard-task-panel">
-      <PanelHeading icon={Icon} title={title} meta={meta} />
-      {tasks.length ? (
-        <div className="dashboard-list">
-          {tasks.slice(0, 3).map((task) => (
-            <div className="dashboard-task-row" key={task.id}>
-              <span className={`dashboard-task-check ${completed ? "is-complete" : ""}`}>
-                {completed && <CheckCircle2 size={14} />}
-              </span>
-              <div>
-                <strong>{task.title}</strong>
-                <small>{task.nextAction || task.checkpoint || (completed ? "완료됨" : "다음 행동을 정해보세요")}</small>
-              </div>
-              <em>{completed ? "완료" : statusMeta[task.status].shortLabel}</em>
-            </div>
-          ))}
-        </div>
-      ) : <Empty text={empty} />}
-    </article>
-  );
-}
+  const [title, setTitle] = useState("");
+  const [categoryId, setCategoryId] = useState("");
+  const [reminderTime, setReminderTime] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
-function PullRequestPanel({
-  icon: Icon,
-  title,
-  meta,
-  pullRequests,
-  empty,
-  review = false,
-}: {
-  icon: typeof GitPullRequest;
-  title: string;
-  meta: string;
-  pullRequests: GitHubPullRequest[];
-  empty: string;
-  review?: boolean;
-}) {
-  return (
-    <article className="dashboard-panel dashboard-pr-panel">
-      <PanelHeading icon={Icon} title={title} meta={meta} />
-      {pullRequests.length ? (
-        <div className="dashboard-list">
-          {pullRequests.slice(0, 3).map((pullRequest) => (
-            <button className="dashboard-pr-row" key={`${pullRequest.repository}:${pullRequest.number}`} type="button" onClick={() => void openUrl(pullRequest.url)}>
-              <span className="dashboard-pr-mark"><GitPullRequest size={14} /></span>
-              <div>
-                <strong>{pullRequest.title}</strong>
-                <small>{pullRequest.repository} · #{pullRequest.number}</small>
-              </div>
-              <em>{review ? "리뷰 필요" : pullRequest.isDraft ? "Draft" : "Open"}</em>
-            </button>
-          ))}
-        </div>
-      ) : <Empty text={empty} />}
-    </article>
-  );
-}
+  useEffect(() => {
+    if (!categoryId && categories[0]) setCategoryId(categories[0].id);
+  }, [categories, categoryId]);
 
-function EventRow({ event }: { event: CalendarEvent }) {
-  const content = (
-    <>
-      <time>{event.allDay ? "종일" : eventTime.format(new Date(event.startAt))}</time>
-      <div>
-        <strong>{event.title}</strong>
-        <small>{event.location ? <><MapPin size={11} /> {event.location}</> : event.source === "google" ? "Google Calendar" : "Orbit 일정"}</small>
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!title.trim() || isSaving) return;
+    setIsSaving(true);
+    setSaveError(null);
+    try {
+      const dateKey = localDateKey(selectedDate);
+      await onSubmit({
+        title: title.trim(),
+        categoryId: categoryId || null,
+        targetAt: reminderTime ? new Date(`${dateKey}T${reminderTime}:00`).toISOString() : null,
+      });
+      setTitle("");
+      setReminderTime("");
+    } catch (cause) {
+      setSaveError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  return (
+    <form className="planner-quick-form" onSubmit={submit}>
+      <div><Plus size={16} /><input aria-label="할 일 제목" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="할 일을 입력하세요" /></div>
+      <div className="planner-quick-options">
+        <label><span className="sr-only">카테고리</span><select value={categoryId} onChange={(event) => setCategoryId(event.target.value)}>{categories.map((category) => <option value={category.id} key={category.id}>{category.name}</option>)}</select></label>
+        <label><AlarmClock size={13} /><span className="sr-only">리마인더 시간</span><input type="time" value={reminderTime} onChange={(event) => setReminderTime(event.target.value)} /></label>
+        <button className="primary-button" type="submit" disabled={!title.trim() || isSaving}>{isSaving ? "추가 중" : "추가"}</button>
       </div>
-      <span>{event.allDay ? "하루 종일" : `${eventTime.format(new Date(event.endAt))}까지`}</span>
-    </>
+      {saveError && <p className="planner-quick-error" role="alert">{saveError}</p>}
+    </form>
   );
-  return event.externalUrl
-    ? <button className="dashboard-event-row" type="button" onClick={() => void openUrl(event.externalUrl!)}>{content}</button>
-    : <div className="dashboard-event-row">{content}</div>;
 }
 
-function PanelHeading({ icon: Icon, title, meta }: { icon: typeof CalendarDays; title: string; meta: string }) {
-  return <header className="dashboard-panel-heading"><div><Icon size={16} strokeWidth={1.8} /><h3>{title}</h3></div><span>{meta}</span></header>;
+function ManagerShell({ title, eyebrow, onClose, children }: { title: string; eyebrow: string; onClose: () => void; children: ReactNode }) {
+  return <div className="modal-backdrop planner-manager-backdrop" onMouseDown={onClose}><section className="planner-manager" role="dialog" aria-modal="true" aria-label={title} onMouseDown={(event) => event.stopPropagation()}><header><div><span>{eyebrow}</span><h2>{title}</h2></div><button type="button" aria-label="닫기" onClick={onClose}><X size={18} /></button></header>{children}</section></div>;
 }
 
-function Empty({ text }: { text: string }) { return <div className="dashboard-empty">{text}</div>; }
+function CategoryManager({ categories, onClose, onChanged }: { categories: PlannerCategory[]; onClose: () => void; onChanged: () => Promise<void> }) {
+  const [name, setName] = useState("");
+  const [color, setColor] = useState(categoryColors[3]);
+  const [message, setMessage] = useState<string | null>(null);
+  return <ManagerShell title="카테고리 관리" eyebrow="PLANNER" onClose={onClose}>
+    <form className="planner-manager-form" onSubmit={(event) => { event.preventDefault(); setMessage(null); void createPlannerCategory(name, color).then(async () => { setName(""); await onChanged(); }).catch((cause) => setMessage(String(cause))); }}>
+      <input value={name} onChange={(event) => setName(event.target.value)} placeholder="새 카테고리 이름" autoFocus />
+      <div className="planner-color-options">{categoryColors.map((candidate) => <button className={color === candidate ? "is-selected" : ""} type="button" aria-label={`${candidate} 색상`} key={candidate} style={{ background: candidate }} onClick={() => setColor(candidate)} />)}</div>
+      <button className="primary-button" type="submit" disabled={!name.trim()}>등록</button>
+    </form>
+    <div className="planner-manager-list">{categories.map((category) => <div key={category.id}><i style={{ background: category.color }} /><span><strong>{category.name}</strong><small>{category.isSystem ? "기본 카테고리" : "사용자 카테고리"}</small></span>{!category.isSystem && <button type="button" aria-label={`${category.name} 삭제`} onClick={() => void deletePlannerCategory(category.id).then(() => onChanged()).catch((cause) => setMessage(String(cause)))}><Trash2 size={15} /></button>}</div>)}</div>
+    {message && <p className="planner-manager-error">{message}</p>}
+  </ManagerShell>;
+}
+
+function RoutineManager({ categories, routines, rangeStart, rangeEnd, onClose, onChanged }: { categories: PlannerCategory[]; routines: PlannerRoutine[]; rangeStart: string; rangeEnd: string; onClose: () => void; onChanged: () => Promise<void> }) {
+  const [title, setTitle] = useState("");
+  const [categoryId, setCategoryId] = useState(categories[0]?.id || "");
+  const [weekdays, setWeekdays] = useState<number[]>([1, 2, 3, 4, 5]);
+  const [reminderTime, setReminderTime] = useState("");
+  const [message, setMessage] = useState<string | null>(null);
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    setMessage(null);
+    try {
+      await createPlannerRoutine({ title, categoryId: categoryId || null, weekdays, reminderTime: reminderTime || null });
+      await materializePlannerRoutines(rangeStart, rangeEnd);
+      setTitle("");
+      await onChanged();
+    } catch (cause) { setMessage(String(cause)); }
+  }
+  return <ManagerShell title="루틴 관리" eyebrow="REPEAT" onClose={onClose}>
+    <form className="planner-routine-form" onSubmit={(event) => void submit(event)}>
+      <input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="예: 영어 단어 20개" autoFocus />
+      <div className="planner-routine-fields"><select value={categoryId} onChange={(event) => setCategoryId(event.target.value)}>{categories.map((category) => <option value={category.id} key={category.id}>{category.name}</option>)}</select><label><AlarmClock size={13} /><input type="time" value={reminderTime} onChange={(event) => setReminderTime(event.target.value)} /></label></div>
+      <div className="planner-weekday-options">{routineWeekdays.map((label, day) => <button className={weekdays.includes(day) ? "is-selected" : ""} type="button" key={label} onClick={() => setWeekdays((current) => current.includes(day) ? current.filter((value) => value !== day) : [...current, day])}>{label}</button>)}</div>
+      <button className="primary-button" type="submit" disabled={!title.trim() || weekdays.length === 0}>루틴 등록</button>
+    </form>
+    <div className="planner-manager-list">{routines.map((routine) => <div key={routine.id}><Repeat2 size={16} /><span><strong>{routine.title}</strong><small>{routine.weekdays.map((day) => routineWeekdays[day]).join(" · ")}{routine.reminderTime ? ` · ${routine.reminderTime}` : ""}</small></span><button type="button" aria-label={`${routine.title} 삭제`} onClick={() => void deletePlannerRoutine(routine.id).then(() => onChanged()).catch((cause) => setMessage(String(cause)))}><Trash2 size={15} /></button></div>)}{routines.length === 0 && <div className="planner-manager-empty">등록한 루틴이 없습니다.</div>}</div>
+    {message && <p className="planner-manager-error">{message}</p>}
+  </ManagerShell>;
+}
+
+function ReminderManager({ reminders, onOpen, onClose }: { reminders: WorkItem[]; onOpen: (item: WorkItem) => void; onClose: () => void }) {
+  return <ManagerShell title="리마인더 관리" eyebrow="REMINDER" onClose={onClose}><div className="planner-manager-list planner-reminder-list">{reminders.map((item) => <button type="button" key={item.id} onClick={() => onOpen(item)}><AlarmClock size={16} /><span><strong>{item.title}</strong><small>{new Intl.DateTimeFormat("ko-KR", { month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(item.targetAt!))}</small></span><ChevronRight size={15} /></button>)}{reminders.length === 0 && <div className="planner-manager-empty">설정된 리마인더가 없습니다. 할 일을 추가할 때 시간을 선택해보세요.</div>}</div></ManagerShell>;
+}

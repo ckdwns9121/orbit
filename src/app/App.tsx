@@ -441,6 +441,7 @@ function App() {
           <DashboardPage
             workItems={items}
             onResume={(item) => { void handleResume(item); }}
+            onComplete={(item) => { void handleMove(item.id, "done"); }}
             onOpenContext={setContextItem}
             onChanged={refresh}
           />
