@@ -2,7 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { applyTheme, getStoredTheme } from "./theme/theme";
+import { applyTheme, getStoredTheme } from "./shared/config/theme/theme";
 
 applyTheme(getStoredTheme());
 
@@ -14,8 +14,8 @@ if (windowLabel !== "tray") {
 }
 
 const componentPromise = windowLabel === "tray"
-  ? import("./tray/TrayApp")
-  : import("./App");
+  ? import("./widgets/tray")
+  : import("./app/App");
 
 void componentPromise.then(({ default: RootComponent }) => {
   ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(

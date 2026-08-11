@@ -357,6 +357,24 @@ pub fn run() {
             sql: include_str!("../migrations/0026_automation_execution.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 27,
+            description: "create_rebuildable_context_graph",
+            sql: include_str!("../migrations/0027_context_graph.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 28,
+            description: "harden_context_graph_projection",
+            sql: include_str!("../migrations/0028_context_graph_hardening.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 29,
+            description: "create_daily_planner",
+            sql: include_str!("../migrations/0029_daily_planner.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()
