@@ -1,13 +1,18 @@
-import { useCallback, useEffect, useMemo, useState, type CSSProperties, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type CSSProperties, type DragEvent, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import {
   AlarmClock,
+  ArrowDown,
+  ArrowUp,
   CalendarDays,
   Check,
   ChevronLeft,
   ChevronRight,
   Circle,
   Focus,
+  GripVertical,
   MoreHorizontal,
+  Pin,
+  PinOff,
   Plus,
   Repeat2,
   Settings2,
@@ -16,7 +21,15 @@ import {
   X,
 } from "lucide-react";
 import { listCalendarEvents } from "../../entities/work-context/api/calendar-event-repository";
-import { addWorkItemToDailyPlan, listDailyPlanRange } from "../../entities/work-context/api/daily-plan-repository";
+import {
+  addDailyPriority,
+  addWorkItemToDailyPlan,
+  listDailyPlanRange,
+  listDailyPriorities,
+  removeDailyPriority,
+  reorderDailyPriorities,
+  replaceDailyPriority,
+} from "../../entities/work-context/api/daily-plan-repository";
 import {
   createPlannerCategory,
   createPlannerRoutine,
@@ -28,7 +41,7 @@ import {
 } from "../../entities/work-context/api/planner-repository";
 import { createWorkItem } from "../../entities/work-context/api/work-item-repository";
 import { isSameDay, type CalendarEvent } from "../../entities/work-context/model/calendar-event";
-import { localDateKey, type DailyPlanEntry } from "../../entities/work-context/model/daily-plan";
+import { localDateKey, reorderDailyPriorityIds, type DailyPlanEntry, type DailyPriority } from "../../entities/work-context/model/daily-plan";
 import { monthGridDays, type PlannerCategory, type PlannerRoutine } from "../../entities/work-context/model/planner";
 import type { WorkItem } from "../../entities/work-context/model/work-item";
 import "./DashboardPage.scss";
@@ -58,6 +71,7 @@ export default function DashboardPage({
   const [month, setMonth] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1));
   const [selectedDate, setSelectedDate] = useState(() => new Date());
   const [entries, setEntries] = useState<DailyPlanEntry[]>([]);
+  const [priorities, setPriorities] = useState<DailyPriority[]>([]);
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [categories, setCategories] = useState<PlannerCategory[]>([]);
   const [routines, setRoutines] = useState<PlannerRoutine[]>([]);
@@ -65,37 +79,54 @@ export default function DashboardPage({
   const [isManagerMenuOpen, setIsManagerMenuOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [isPriorityPickerOpen, setIsPriorityPickerOpen] = useState(false);
+  const [replacementCandidate, setReplacementCandidate] = useState<WorkItem | null>(null);
+  const [draggedPriorityId, setDraggedPriorityId] = useState<string | null>(null);
+  const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
+  const [isPriorityDragOver, setIsPriorityDragOver] = useState(false);
+  const [priorityAnnouncement, setPriorityAnnouncement] = useState("");
   const days = useMemo(() => monthGridDays(month), [month]);
   const rangeStart = localDateKey(days[0]);
   const rangeEnd = localDateKey(days[days.length - 1]);
+  const selectedKey = localDateKey(selectedDate);
 
   const refresh = useCallback(async () => {
     setError(null);
     try {
       const [nextCategories, nextRoutines] = await Promise.all([listPlannerCategories(), listPlannerRoutines()]);
       await materializePlannerRoutines(rangeStart, rangeEnd);
-      const [nextEntries, nextEvents] = await Promise.all([
+      const [nextEntries, nextEvents, nextPriorities] = await Promise.all([
         listDailyPlanRange(rangeStart, rangeEnd),
         listCalendarEvents(days[0], new Date(days[days.length - 1].getFullYear(), days[days.length - 1].getMonth(), days[days.length - 1].getDate() + 1)),
+        listDailyPriorities(selectedKey),
       ]);
       setCategories(nextCategories);
       setRoutines(nextRoutines);
       setEntries(nextEntries);
       setEvents(nextEvents);
+      setPriorities(nextPriorities);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setIsLoading(false);
     }
-  }, [rangeEnd, rangeStart]);
+  }, [rangeEnd, rangeStart, selectedKey]);
 
   useEffect(() => {
     setIsLoading(true);
     void refresh();
   }, [refresh]);
 
-  const selectedKey = localDateKey(selectedDate);
-  const selectedEntries = entries.filter((entry) => entry.planDate === selectedKey);
+  const currentWorkItemById = new Map(workItems.map((item) => [item.id, item]));
+  const selectedEntries = entries
+    .filter((entry) => entry.planDate === selectedKey)
+    .map((entry) => ({ ...entry, workItem: currentWorkItemById.get(entry.workItemId) || entry.workItem }));
+  const currentPriorities = priorities.map((priority) => ({
+    ...priority,
+    workItem: currentWorkItemById.get(priority.workItemId) || priority.workItem,
+  }));
+  const priorityWorkItemIds = new Set(currentPriorities.map((priority) => priority.workItemId));
+  const otherEntries = selectedEntries.filter((entry) => !priorityWorkItemIds.has(entry.workItemId));
   const selectedEvents = events.filter((event) => isSameDay(new Date(event.startAt), selectedDate));
   const categoryById = new Map(categories.map((category) => [category.id, category]));
   const selectedCompleted = selectedEntries.filter((entry) => entry.workItem.status === "done").length;
@@ -119,6 +150,84 @@ export default function DashboardPage({
     const id = await createWorkItem({ title: input.title, status: "todo", categoryId: input.categoryId, targetAt: input.targetAt });
     await addWorkItemToDailyPlan(id, selectedKey);
     await Promise.all([refresh(), onChanged()]);
+  }
+
+  async function refreshPriorities() {
+    setPriorities(await listDailyPriorities(selectedKey));
+  }
+
+  async function addPriority(item: WorkItem) {
+    if (priorityWorkItemIds.has(item.id)) return;
+    if (currentPriorities.length >= 3) {
+      setReplacementCandidate(item);
+      return;
+    }
+    try {
+      await addDailyPriority(selectedKey, item.id);
+      await refreshPriorities();
+      setIsPriorityPickerOpen(false);
+      setPriorityAnnouncement(`${item.title}을(를) ${currentPriorities.length + 1}순위 핵심 작업으로 추가했습니다.`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }
+
+  async function removePriority(priority: DailyPriority) {
+    try {
+      await removeDailyPriority(priority.id);
+      await refreshPriorities();
+      setPriorityAnnouncement(`${priority.workItem.title}을(를) 핵심 작업에서 해제했습니다.`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }
+
+  async function replacePriority(priority: DailyPriority) {
+    if (!replacementCandidate) return;
+    try {
+      const nextTitle = replacementCandidate.title;
+      await replaceDailyPriority(priority.id, replacementCandidate.id);
+      setReplacementCandidate(null);
+      setIsPriorityPickerOpen(false);
+      await refreshPriorities();
+      setPriorityAnnouncement(`${priority.rank}순위 핵심 작업을 ${nextTitle}(으)로 교체했습니다.`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }
+
+  async function movePriority(sourceId: string, targetId: string) {
+    const ids = currentPriorities.map((priority) => priority.id);
+    const orderedIds = reorderDailyPriorityIds(ids, sourceId, targetId);
+    if (orderedIds.every((id, index) => id === ids[index])) return;
+    const byId = new Map(currentPriorities.map((priority) => [priority.id, priority]));
+    setPriorities(orderedIds.flatMap((id, index) => {
+      const priority = byId.get(id);
+      return priority ? [{ ...priority, rank: index + 1 }] : [];
+    }));
+    try {
+      await reorderDailyPriorities(selectedKey, orderedIds);
+      const moved = byId.get(sourceId);
+      setPriorityAnnouncement(`${moved?.workItem.title || "핵심 작업"}의 순서를 변경했습니다.`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+      await refreshPriorities();
+    }
+  }
+
+  function shiftPriority(priorityId: string, direction: -1 | 1) {
+    const index = currentPriorities.findIndex((priority) => priority.id === priorityId);
+    const target = currentPriorities[index + direction];
+    if (target) void movePriority(priorityId, target.id);
+  }
+
+  function dropTaskIntoPriorities(event: DragEvent<HTMLElement>) {
+    event.preventDefault();
+    setIsPriorityDragOver(false);
+    if (!draggedTaskId || draggedPriorityId) return;
+    const item = selectedEntries.find((entry) => entry.workItemId === draggedTaskId)?.workItem;
+    setDraggedTaskId(null);
+    if (item) void addPriority(item);
   }
 
   return (
@@ -204,19 +313,80 @@ export default function DashboardPage({
             <em>{selectedEntries.length ? `${selectedCompleted}/${selectedEntries.length}` : "0"}</em>
           </header>
 
+          <section
+            className={`planner-priority-section ${isPriorityDragOver ? "is-drag-over" : ""}`}
+            aria-label={`${isSameDay(selectedDate, new Date()) ? "오늘" : "이날"}의 핵심 작업, 최대 3개`}
+            onDragOver={(event) => { event.preventDefault(); if (draggedTaskId && !draggedPriorityId) setIsPriorityDragOver(true); }}
+            onDragLeave={() => setIsPriorityDragOver(false)}
+            onDrop={dropTaskIntoPriorities}
+          >
+            <header className="planner-priority-heading">
+              <div><Pin size={14} /><strong>{isSameDay(selectedDate, new Date()) ? "오늘의 핵심" : "이날의 핵심"}</strong></div>
+              <span>{currentPriorities.length}/3</span>
+            </header>
+            <div className="planner-priority-list" role="list">
+              {currentPriorities.map((priority, index) => {
+                const item = priority.workItem;
+                const category = item.categoryId ? categoryById.get(item.categoryId) : undefined;
+                return (
+                  <article
+                    className={`planner-priority-card ${item.status === "done" ? "is-done" : ""} ${item.status === "focus" ? "is-focused" : ""} ${draggedPriorityId === priority.id ? "is-dragging" : ""}`}
+                    draggable
+                    key={priority.id}
+                    role="listitem"
+                    style={{ "--category-color": category?.color || "var(--accent)" } as CSSProperties}
+                    onDragStart={() => { setDraggedPriorityId(priority.id); setDraggedTaskId(null); }}
+                    onDragEnd={() => setDraggedPriorityId(null)}
+                    onDragOver={(event) => event.preventDefault()}
+                    onDrop={(event) => { event.preventDefault(); if (draggedPriorityId) void movePriority(draggedPriorityId, priority.id); setDraggedPriorityId(null); }}
+                    onKeyDown={(event: KeyboardEvent<HTMLElement>) => {
+                      if (!event.altKey || (event.key !== "ArrowUp" && event.key !== "ArrowDown")) return;
+                      event.preventDefault();
+                      shiftPriority(priority.id, event.key === "ArrowUp" ? -1 : 1);
+                    }}
+                    tabIndex={0}
+                  >
+                    <GripVertical className="planner-priority-grip" size={15} aria-hidden="true" />
+                    <span className="planner-priority-rank" aria-label={`${index + 1}순위`}>{index + 1}</span>
+                    <button className="planner-priority-copy" type="button" onClick={() => onOpenContext(item)}><strong>{item.title}</strong><small>{category?.name || "미분류"}</small></button>
+                    {item.status === "done" ? <span className="planner-priority-state"><Check size={14} /> 완료</span> : item.status === "focus" ? <span className="planner-priority-state is-active"><Focus size={14} /> 집중 중</span> : <button className="planner-focus-button" type="button" onClick={() => onResume(item)}><Focus size={14} /><span>집중</span></button>}
+                    <div className="planner-priority-actions">
+                      <button type="button" disabled={index === 0} aria-label={`${item.title} 위로 이동`} onClick={() => shiftPriority(priority.id, -1)}><ArrowUp size={13} /></button>
+                      <button type="button" disabled={index === currentPriorities.length - 1} aria-label={`${item.title} 아래로 이동`} onClick={() => shiftPriority(priority.id, 1)}><ArrowDown size={13} /></button>
+                      <button type="button" aria-label={`${item.title} 핵심에서 해제`} onClick={() => void removePriority(priority)}><PinOff size={13} /></button>
+                    </div>
+                  </article>
+                );
+              })}
+              {currentPriorities.length < 3 && (
+                <button className="planner-priority-slot" type="button" onClick={() => setIsPriorityPickerOpen(true)}><Plus size={14} /><span>핵심 할 일 선택</span></button>
+              )}
+            </div>
+          </section>
+
+          <p className="sr-only" aria-live="polite">{priorityAnnouncement}</p>
+
           <QuickTaskForm categories={categories} selectedDate={selectedDate} onSubmit={createPlannedTask} />
 
           <div className="planner-task-list">
-            {selectedEntries.map((entry) => {
+            {otherEntries.length > 0 && <div className="planner-other-heading"><strong>다른 할 일</strong><span>{otherEntries.length}</span></div>}
+            {otherEntries.map((entry) => {
               const category = entry.workItem.categoryId ? categoryById.get(entry.workItem.categoryId) : undefined;
               return (
-                <article className={entry.workItem.status === "done" ? "is-done" : ""} key={entry.id} style={{ "--category-color": category?.color || "var(--accent)" } as CSSProperties}>
+                <article
+                  className={entry.workItem.status === "done" ? "is-done" : ""}
+                  draggable={entry.workItem.status !== "done"}
+                  key={entry.id}
+                  style={{ "--category-color": category?.color || "var(--accent)" } as CSSProperties}
+                  onDragStart={() => { setDraggedTaskId(entry.workItemId); setDraggedPriorityId(null); }}
+                  onDragEnd={() => { setDraggedTaskId(null); setIsPriorityDragOver(false); }}
+                >
                   <button className="planner-task-check" type="button" disabled={entry.workItem.status === "done"} aria-label={entry.workItem.status === "done" ? `${entry.workItem.title} 완료됨` : `${entry.workItem.title} 완료`} onClick={() => onComplete(entry.workItem)}>{entry.workItem.status === "done" ? <Check size={14} /> : <Circle size={14} />}</button>
                   <button className="planner-task-copy" type="button" onClick={() => onOpenContext(entry.workItem)}>
                     <strong>{entry.workItem.title}</strong>
                     <small>{category?.name || "미분류"}{entry.workItem.targetAt ? ` · ${timeLabel.format(new Date(entry.workItem.targetAt))} 알림` : ""}</small>
                   </button>
-                  {entry.workItem.status !== "done" && <button className="planner-focus-button" type="button" onClick={() => onResume(entry.workItem)}><Focus size={14} /><span>집중</span></button>}
+                  {entry.workItem.status !== "done" && <div className="planner-task-actions"><button type="button" aria-label={`${entry.workItem.title} 핵심에 추가`} onClick={() => void addPriority(entry.workItem)}><Pin size={13} /></button><button className="planner-focus-button" type="button" onClick={() => onResume(entry.workItem)}><Focus size={14} /><span>집중</span></button></div>}
                 </article>
               );
             })}
@@ -237,7 +407,32 @@ export default function DashboardPage({
       {manager === "category" && <CategoryManager categories={categories} onClose={() => setManager(null)} onChanged={refresh} />}
       {manager === "routine" && <RoutineManager categories={categories} routines={routines} rangeStart={rangeStart} rangeEnd={rangeEnd} onClose={() => setManager(null)} onChanged={async () => { await refresh(); await onChanged(); }} />}
       {manager === "reminder" && <ReminderManager reminders={reminders} onOpen={(item) => { setManager(null); onOpenContext(item); }} onClose={() => setManager(null)} />}
+      {isPriorityPickerOpen && <PriorityPicker candidates={otherEntries.filter((entry) => entry.workItem.status !== "done").map((entry) => entry.workItem)} onSelect={(item) => void addPriority(item)} onClose={() => setIsPriorityPickerOpen(false)} />}
+      {replacementCandidate && <PriorityReplacement priorities={currentPriorities} candidate={replacementCandidate} onReplace={(priority) => void replacePriority(priority)} onClose={() => setReplacementCandidate(null)} />}
     </main>
+  );
+}
+
+function PriorityPicker({ candidates, onSelect, onClose }: { candidates: WorkItem[]; onSelect: (item: WorkItem) => void; onClose: () => void }) {
+  return (
+    <ManagerShell title="핵심 할 일 선택" eyebrow="TOP 3" onClose={onClose}>
+      <p className="planner-priority-dialog-copy">이 날짜에 꼭 끝낼 작업을 최대 3개까지 고르세요.</p>
+      <div className="planner-priority-picker">
+        {candidates.map((item) => <button type="button" key={item.id} onClick={() => onSelect(item)}><Pin size={15} /><span><strong>{item.title}</strong><small>오늘의 핵심에 추가</small></span><ChevronRight size={15} /></button>)}
+        {candidates.length === 0 && <div className="planner-manager-empty">추가할 수 있는 미완료 할 일이 없습니다.</div>}
+      </div>
+    </ManagerShell>
+  );
+}
+
+function PriorityReplacement({ priorities, candidate, onReplace, onClose }: { priorities: DailyPriority[]; candidate: WorkItem; onReplace: (priority: DailyPriority) => void; onClose: () => void }) {
+  return (
+    <ManagerShell title="핵심 작업 교체" eyebrow="TOP 3 FULL" onClose={onClose}>
+      <p className="planner-priority-dialog-copy"><strong>{candidate.title}</strong>을(를) 추가하려면 기존 핵심 작업 하나를 선택해 교체하세요.</p>
+      <div className="planner-priority-picker">
+        {priorities.map((priority) => <button type="button" key={priority.id} onClick={() => onReplace(priority)}><span className="planner-priority-rank">{priority.rank}</span><span><strong>{priority.workItem.title}</strong><small>이 작업과 교체</small></span><ChevronRight size={15} /></button>)}
+      </div>
+    </ManagerShell>
   );
 }
 
