@@ -58,6 +58,25 @@ test("planner categories and routines preserve Task ownership", () => {
   database.close();
 });
 
+test("daily priorities keep at most three ranked tasks per day", () => {
+  const database = migratedDatabase();
+  for (const id of ["a", "b", "c", "d"]) insertTask(database, id);
+  for (const [index, id] of ["a", "b", "c"].entries()) {
+    database.query(`INSERT INTO daily_priorities(id, plan_date, work_item_id, rank, created_at, updated_at)
+      VALUES (?, '2026-08-11', ?, ?, '2026-08-11', '2026-08-11')`).run(`priority-${id}`, id, index + 1);
+  }
+  expect(() => database.query(`INSERT INTO daily_priorities(id, plan_date, work_item_id, rank, created_at, updated_at)
+    VALUES ('priority-d', '2026-08-11', 'd', 3, '2026-08-11', '2026-08-11')`).run())
+    .toThrow("daily_priority_limit_reached");
+  database.query("DELETE FROM work_items WHERE id='b'").run();
+  expect(database.query("SELECT work_item_id, rank FROM daily_priorities ORDER BY rank").all()).toEqual([
+    { work_item_id: "a", rank: 1 },
+    { work_item_id: "c", rank: 3 },
+  ]);
+  expect(database.query("PRAGMA foreign_key_check").all()).toEqual([]);
+  database.close();
+});
+
 test("context graph publishes complete immutable generations and safely prunes only old ones", () => {
   const database = migratedDatabase();
   database.query(`INSERT INTO context_graph_generations(

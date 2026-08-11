@@ -381,6 +381,12 @@ pub fn run() {
             sql: include_str!("../migrations/0030_simple_planner.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 31,
+            description: "create_daily_priorities",
+            sql: include_str!("../migrations/0031_daily_priorities.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()
