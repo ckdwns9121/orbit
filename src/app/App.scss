@@ -392,7 +392,7 @@ select:focus, input:focus, textarea:focus { border-color: #7770e4; box-shadow: 0
 .composer-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 24px; }
 
 .task-context-backdrop { place-items: stretch end; padding: 0; background: rgba(28, 27, 26, .22); backdrop-filter: blur(1px); }
-.task-context-modal { width: min(580px, calc(100vw - 32px)); height: 100vh; max-height: none; overflow-y: auto; padding: 28px; color: var(--text); background: var(--surface); border: 0; border-left: 1px solid var(--border); border-radius: 0; box-shadow: -18px 0 52px rgba(30, 28, 26, .16); animation: task-drawer-in .2s ease-out; }
+.task-context-modal { width: min(580px, calc(100vw - 32px)); height: 100vh; max-height: none; overflow-y: auto; overscroll-behavior: contain; padding: 28px; color: var(--text); background: var(--surface); border: 0; border-left: 1px solid var(--border); border-radius: 0; outline: none; box-shadow: -18px 0 52px rgba(30, 28, 26, .16); animation: task-drawer-in .2s ease-out; }
 @keyframes task-drawer-in { from { opacity: .65; transform: translateX(28px); } to { opacity: 1; transform: translateX(0); } }
 .task-context-modal > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding-bottom: 18px; border-bottom: 1px solid var(--border); }
 .task-context-modal > header span { color: var(--accent); font-size: 10px; font-weight: 700; }
@@ -546,10 +546,11 @@ select:focus, input:focus, textarea:focus { border-color: #7770e4; box-shadow: 0
   .task-sort-actions { width: 100%; justify-content: space-between; }
   .task-sort-actions label { width: min(180px, 62%); }
   .task-board-page { padding-inline: 16px; }
+  .task-context-modal { width: 100vw; padding: 22px 18px; border-left: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .app-shell, .sidebar, .workspace, .topbar, .task-board-page, .task-board-toolbar, .task-board-column { transition: none; }
+  .app-shell, .sidebar, .workspace, .topbar, .task-board-page, .task-board-toolbar, .task-board-column, .task-context-modal { transition: none; animation: none; }
 }
 
 /* Dynamic theme surfaces */

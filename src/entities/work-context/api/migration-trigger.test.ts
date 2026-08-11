@@ -186,6 +186,38 @@ test("hard delete blocks unresolved actions and follows retention policy", () =>
   database.close();
 });
 
+test("daily planner follows completion and reopen status changes", () => {
+  const database = migratedDatabase();
+  insertTask(database, "a");
+  database.query(`INSERT INTO daily_plan_entries(
+    id, work_item_id, plan_date, sort_order, state, created_at, updated_at
+  ) VALUES (
+    'plan-a', 'a', '2026-08-11', 0, 'planned',
+    '2026-08-11T01:00:00.000Z', '2026-08-11T01:00:00.000Z'
+  )`).run();
+
+  database.query(`INSERT INTO completion_records(
+    id, work_item_id, result_summary, provenance, state, base_work_item_revision,
+    completed_at, created_at
+  ) VALUES (
+    'done-a', 'a', 'Delivered', 'user', 'active', 0,
+    '2026-08-11T02:00:00.000Z', '2026-08-11T02:00:00.000Z'
+  )`).run();
+
+  expect(database.query("SELECT status FROM work_items WHERE id='a'").get())
+    .toEqual({ status: "done" });
+  expect(database.query("SELECT state FROM daily_plan_entries WHERE id='plan-a'").get())
+    .toEqual({ state: "completed" });
+
+  database.query(`UPDATE work_items
+    SET status='todo', revision=revision+1, updated_at='2026-08-11T03:00:00.000Z'
+    WHERE id='a'`).run();
+
+  expect(database.query("SELECT state FROM daily_plan_entries WHERE id='plan-a'").get())
+    .toEqual({ state: "planned" });
+  database.close();
+});
+
 test("Inbox and external-action state changes append audit events in the same statement", () => {
   const database = migratedDatabase();
   insertTask(database, "a");

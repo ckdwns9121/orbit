@@ -369,6 +369,12 @@ pub fn run() {
             sql: include_str!("../migrations/0028_context_graph_hardening.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 29,
+            description: "create_daily_planner",
+            sql: include_str!("../migrations/0029_daily_planner.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()

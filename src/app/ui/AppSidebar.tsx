@@ -44,7 +44,7 @@ export default function AppSidebar({
   onToggleCollapsed,
 }: AppSidebarProps) {
   const navigation: NavigationItem[] = [
-    { section: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+    { section: "dashboard", label: "Today", icon: LayoutDashboard },
     { section: "tasks", label: "Task", icon: CheckSquare, count: items.filter((item) => item.status !== "done").length },
     { section: "jira", label: "Jira Tickets", icon: Ticket },
     { section: "chat", label: "Chat", icon: MessageCircle },

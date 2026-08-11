@@ -1,5 +1,35 @@
 @use "../../shared/styles/tokens" as *;
 
+.daily-planner { margin: 0 0 22px; padding: 18px; background: var(--surface); border: 1px solid var(--border); border-radius: 16px; }
+.daily-planner-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.daily-planner-header > button { width: 34px; height: 34px; padding: 0; border-radius: 9px; }
+.daily-planner-header > div { display: flex; align-items: baseline; gap: 10px; }
+.daily-planner-header strong { font-size: 16px; }
+.daily-planner-header span { color: var(--text-muted); font-size: 11px; }
+.daily-planner-progress { height: 4px; margin-bottom: 14px; overflow: hidden; background: var(--subtle); border-radius: 999px; }
+.daily-planner-progress i { display: block; height: 100%; background: var(--accent); border-radius: inherit; transition: width .2s ease; }
+.daily-quick-add { display: flex; align-items: center; gap: 9px; padding: 9px 10px; background: var(--subtle); border: 1px solid var(--border); border-radius: 10px; }
+.daily-quick-add svg { color: var(--text-muted); }
+.daily-quick-add input { flex: 1; min-width: 0; background: transparent; border: 0; outline: 0; }
+.daily-quick-add button { height: 28px; padding: 0 10px; }
+.daily-plan-list { display: flex; flex-direction: column; margin-top: 10px; }
+.daily-plan-row { position: relative; display: flex; align-items: center; gap: 9px; min-height: 52px; border-bottom: 1px solid var(--border); transition: opacity .15s ease, background .15s ease, transform .15s ease; }
+.daily-plan-row:last-child { border-bottom: 0; }
+.daily-plan-row.is-dragging { opacity: .38; }
+.daily-plan-row.is-drop-target { background: var(--accent-soft); }
+.daily-plan-row.is-drop-target::before { position: absolute; inset: -1px 0 auto; height: 2px; content: ""; background: var(--accent); border-radius: 999px; }
+.daily-plan-drag-handle { display: grid; flex: 0 0 26px; width: 26px; height: 30px; padding: 0; place-items: center; color: var(--text-faint); border-color: transparent; background: transparent; cursor: grab; }
+.daily-plan-drag-handle:hover,.daily-plan-drag-handle:focus-visible { color: var(--accent); background: var(--accent-soft); }
+.daily-plan-drag-handle:active { cursor: grabbing; }
+.daily-plan-check { width: 26px; height: 26px; padding: 0; color: var(--success); border: 0; }
+.daily-plan-check span { display: block; width: 16px; height: 16px; border: 1px solid var(--border-strong); border-radius: 50%; }
+.daily-plan-copy { display: flex; flex: 1; min-width: 0; height: auto; padding: 7px 0; flex-direction: column; align-items: flex-start; background: transparent; border: 0; text-align: left; }
+.daily-plan-copy strong, .daily-plan-copy small { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.daily-plan-copy small { margin-top: 3px; color: var(--text-muted); }
+.daily-plan-row.is-done .daily-plan-copy strong { color: var(--text-muted); text-decoration: line-through; }
+.daily-plan-hint { margin: 10px 0 0; color: var(--text-muted); font-size: 10px; }
+.daily-plan-error { margin: 10px 0 0; padding: 9px 10px; color: var(--danger); background: var(--danger-soft); border-radius: 8px; font-size: 10px; }
+
 .dashboard-page { max-width: 1500px; margin: 0 auto; padding: 27px 34px 52px; }
 .dashboard-loading,.dashboard-error { padding: 40px; color: var(--text-muted); font-size: 13px; }
 .dashboard-heading { margin-bottom: 20px; }
@@ -58,3 +88,4 @@
 @media (max-width: 1100px) { .dashboard-continuity { grid-template-columns: 1fr 1fr; }.dashboard-resume-card { grid-column: 1 / -1; } }
 @media (max-width: 900px) { .dashboard-work-grid,.dashboard-continuity { grid-template-columns: 1fr; }.dashboard-resume-card { grid-column: auto; } }
 @media (max-width: 720px) { .dashboard-page { padding: 22px 18px 40px; }.dashboard-event-row { grid-template-columns: 52px minmax(0,1fr); }.dashboard-event-row > span { display: none; } }
+@media (prefers-reduced-motion: reduce) { .daily-plan-row { transition: none; } }

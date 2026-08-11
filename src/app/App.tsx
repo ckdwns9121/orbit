@@ -442,6 +442,7 @@ function App() {
             workItems={items}
             onResume={(item) => { void handleResume(item); }}
             onOpenContext={setContextItem}
+            onChanged={refresh}
           />
         ) : activeSection === "calendar" ? (
           <CalendarPage />
@@ -606,7 +607,7 @@ function App() {
       )}
 
       {contextItem && (
-        <TaskContextModal
+        <TaskDetailDrawer
           item={items.find((item) => item.id === contextItem.id) || contextItem}
           onClose={() => setContextItem(null)}
           onChanged={refresh}
@@ -849,7 +850,7 @@ function TaskTargetEditor({ item, onChanged }: { item: WorkItem; onChanged: () =
   );
 }
 
-function TaskContextModal({ item, onClose, onChanged }: { item: WorkItem; onClose: () => void; onChanged: () => Promise<void> }) {
+function TaskDetailDrawer({ item, onClose, onChanged }: { item: WorkItem; onClose: () => void; onChanged: () => Promise<void> }) {
   const [sessions, setSessions] = useState<AiSession[]>([]);
   const [links, setLinks] = useState<WorkItemLink[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -865,6 +866,59 @@ function TaskContextModal({ item, onClose, onChanged }: { item: WorkItem; onClos
   const [isAutoConnecting, setIsAutoConnecting] = useState(false);
   const [autoConnectMessage, setAutoConnectMessage] = useState<string | null>(null);
   const syncedJiraLinksRef = useRef(new Set<string>());
+  const drawerRef = useRef<HTMLElement | null>(null);
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  useEffect(() => {
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const backgroundRegions = Array.from(document.querySelectorAll<HTMLElement>(".app-shell > .sidebar, .app-shell > .workspace"));
+    const previousAriaHidden = backgroundRegions.map((region) => region.getAttribute("aria-hidden"));
+    backgroundRegions.forEach((region) => {
+      region.inert = true;
+      region.setAttribute("aria-hidden", "true");
+    });
+
+    const focusFrame = window.requestAnimationFrame(() => closeButtonRef.current?.focus());
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onCloseRef.current();
+        return;
+      }
+      if (event.key !== "Tab" || !drawerRef.current) return;
+      const focusable = Array.from(drawerRef.current.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
+      )).filter((element) => !element.hidden && element.getClientRects().length > 0);
+      if (focusable.length === 0) {
+        event.preventDefault();
+        drawerRef.current.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      window.removeEventListener("keydown", handleKeyDown);
+      backgroundRegions.forEach((region, index) => {
+        region.inert = false;
+        const value = previousAriaHidden[index];
+        if (value === null) region.removeAttribute("aria-hidden");
+        else region.setAttribute("aria-hidden", value);
+      });
+      previousFocus?.focus();
+    };
+  }, [item.id]);
 
   const refreshContext = useCallback(async () => {
     const [nextSessions, nextLinks] = await Promise.all([
@@ -1080,11 +1134,19 @@ function TaskContextModal({ item, onClose, onChanged }: { item: WorkItem; onClos
   const showManualJiraReference = isManualJiraReference || (!isLoadingJiraIssues && jiraIssues.length === 0);
 
   return (
-    <div className="modal-backdrop task-context-backdrop" onMouseDown={onClose}>
-      <section className="task-context-modal task-context-drawer" onMouseDown={(event) => event.stopPropagation()}>
+    <div className="modal-backdrop task-context-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <section
+        ref={drawerRef}
+        className="task-context-modal task-context-drawer"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={`task-detail-title-${item.id}`}
+        aria-describedby={`task-detail-description-${item.id}`}
+        tabIndex={-1}
+      >
         <header>
-          <div><span>Task · Context</span><h2>{item.title}</h2><p>{item.goal || "Jira와 GitHub 개발 흐름, AI 작업 세션을 한곳에서 확인합니다."}</p><small>생성 {formatWorkItemCreatedAt(item.createdAt)}</small></div>
-          <button type="button" onClick={onClose} aria-label="닫기"><X size={18} strokeWidth={1.8} aria-hidden="true" /></button>
+          <div><span>Task · Context</span><h2 id={`task-detail-title-${item.id}`}>{item.title}</h2><p id={`task-detail-description-${item.id}`}>{item.goal || "Jira와 GitHub 개발 흐름, AI 작업 세션을 한곳에서 확인합니다."}</p><small>생성 {formatWorkItemCreatedAt(item.createdAt)}</small></div>
+          <button ref={closeButtonRef} type="button" onClick={onClose} aria-label="작업 상세 닫기"><X size={18} strokeWidth={1.8} aria-hidden="true" /></button>
         </header>
 
         <TaskTargetEditor item={item} onChanged={onChanged} />

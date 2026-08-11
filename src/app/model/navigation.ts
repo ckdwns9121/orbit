@@ -10,7 +10,7 @@ export type PrimarySection =
   | "settings";
 
 export const sectionTitle: Record<PrimarySection, string> = {
-  dashboard: "Dashboard",
+  dashboard: "Today",
   tasks: "Task",
   calendar: "Calendar",
   chat: "Chat",
