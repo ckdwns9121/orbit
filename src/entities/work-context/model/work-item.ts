@@ -32,6 +32,7 @@ export interface WorkItem {
   revision: number;
   targetAt: string | null;
   reminderSentAt: string | null;
+  categoryId?: string | null;
   position: number;
   createdAt: string;
   updatedAt: string;
@@ -46,6 +47,7 @@ export interface CreateWorkItemInput {
   nextAction?: string;
   doneDefinition?: string;
   targetAt?: string | null;
+  categoryId?: string | null;
 }
 
 export const statusMeta: Record<

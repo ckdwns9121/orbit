@@ -29,6 +29,7 @@ interface WorkItemRow {
   revision: number;
   target_at: string | null;
   reminder_sent_at: string | null;
+  category_id: string | null;
   position: number;
   created_at: string;
   updated_at: string;
@@ -38,7 +39,7 @@ interface WorkItemRow {
 const selectFields = `
   id, title, status, priority, source, external_id, external_url,
   goal, checkpoint, next_action, done_definition, blocked_reason, resume_condition,
-  paused_at, last_focused_at, next_review_at, revision, target_at, reminder_sent_at, position,
+  paused_at, last_focused_at, next_review_at, revision, target_at, reminder_sent_at, category_id, position,
   created_at, updated_at, completed_at
 `;
 
@@ -63,6 +64,7 @@ function toWorkItem(row: WorkItemRow): WorkItem {
     revision: row.revision,
     targetAt: row.target_at,
     reminderSentAt: row.reminder_sent_at,
+    categoryId: row.category_id,
     position: row.position,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -110,8 +112,8 @@ export async function createWorkItem(input: CreateWorkItemInput): Promise<string
   await database.execute(
     `INSERT INTO work_items (
       id, title, status, priority, source, goal, next_action, done_definition,
-      target_at, position, created_at, updated_at
-    ) VALUES ($1, $2, $3, $4, 'orbit', $5, $6, $7, $8, $9, $10, $10)`,
+      target_at, category_id, position, created_at, updated_at
+    ) VALUES ($1, $2, $3, $4, 'orbit', $5, $6, $7, $8, $9, $10, $11, $11)`,
     [
       id,
       input.title.trim(),
@@ -121,11 +123,20 @@ export async function createWorkItem(input: CreateWorkItemInput): Promise<string
       input.nextAction?.trim() || null,
       input.doneDefinition?.trim() || null,
       input.targetAt ?? null,
+      input.categoryId ?? null,
       next_position,
       now,
     ],
   );
   return id;
+}
+
+export async function updateWorkItemCategory(id: string, categoryId: string | null): Promise<void> {
+  const database = await getDatabase();
+  await database.execute(
+    "UPDATE work_items SET category_id = $1, updated_at = $2 WHERE id = $3",
+    [categoryId, new Date().toISOString(), id],
+  );
 }
 
 export async function reorderWorkItems(status: WorkItemStatus, orderedIds: string[]): Promise<void> {

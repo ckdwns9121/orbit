@@ -1,16 +1,12 @@
 import {
   Calendar,
   CheckSquare,
-  GitPullRequest,
   LayoutDashboard,
-  LayoutGrid,
   MessageCircle,
-  Network,
   PanelLeftClose,
   PanelLeftOpen,
   Plug,
   Settings,
-  Ticket,
   type LucideIcon,
 } from "lucide-react";
 import type { SourceSyncState } from "../../entities/work-context/model/work-continuity";
@@ -44,14 +40,10 @@ export default function AppSidebar({
   onToggleCollapsed,
 }: AppSidebarProps) {
   const navigation: NavigationItem[] = [
-    { section: "dashboard", label: "Today", icon: LayoutDashboard },
+    { section: "dashboard", label: "Planner", icon: LayoutDashboard },
     { section: "tasks", label: "Task", icon: CheckSquare, count: items.filter((item) => item.status !== "done").length },
-    { section: "jira", label: "Jira Tickets", icon: Ticket },
-    { section: "chat", label: "Chat", icon: MessageCircle },
-    { section: "graph", label: "Graph", icon: Network },
     { section: "calendar", label: "Calendar", icon: Calendar },
-    { section: "sessions", label: "Workspace", icon: LayoutGrid },
-    { section: "pull_requests", label: "Pull Requests", icon: GitPullRequest },
+    { section: "chat", label: "Chat", icon: MessageCircle },
   ];
   const hasSyncProblem = sourceSyncStates.some((state) =>
     ["failed", "auth-required", "rate-limited", "partial", "stale"].includes(state.status),
