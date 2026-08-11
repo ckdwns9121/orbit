@@ -8,8 +8,9 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "verify:fsd": "bun scripts/verify-fsd.ts",
-    "bundle:mac": "tauri build --bundles app,dmg",
-    "bundle:mac:universal": "tauri build --bundles app,dmg --target universal-apple-darwin",
+    "release:check": "bun scripts/check-release-version.ts",
+    "bundle:mac": "CI=true tauri build --bundles app,dmg",
+    "bundle:mac:universal": "CI=true tauri build --bundles app,dmg --target universal-apple-darwin",
     "test": "bun test",
     "preview": "vite preview",
     "tauri": "tauri"

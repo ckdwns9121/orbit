@@ -1,0 +1,120 @@
+name: Release macOS
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag matching the app version (for example v0.1.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build universal macOS release
+    runs-on: macos-latest
+    timeout-minutes: 60
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install Rust targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Run release quality gate
+        run: |
+          bun run verify:fsd
+          bun test
+          cargo test --manifest-path src-tauri/Cargo.toml --locked
+
+      - name: Validate release version and Apple secrets
+        shell: bash
+        run: |
+          bun scripts/check-release-version.ts "$RELEASE_TAG"
+
+          if [[ -n "$APPLE_CERTIFICATE" && -z "$APPLE_CERTIFICATE_PASSWORD" ]]; then
+            echo "::error::APPLE_CERTIFICATE_PASSWORD is required when APPLE_CERTIFICATE is configured."
+            exit 1
+          fi
+
+          notarization_values=0
+          [[ -n "$APPLE_ID" ]] && notarization_values=$((notarization_values + 1))
+          [[ -n "$APPLE_PASSWORD" ]] && notarization_values=$((notarization_values + 1))
+          [[ -n "$APPLE_TEAM_ID" ]] && notarization_values=$((notarization_values + 1))
+          if [[ "$notarization_values" -ne 0 && "$notarization_values" -ne 3 ]]; then
+            echo "::error::APPLE_ID, APPLE_PASSWORD, and APPLE_TEAM_ID must be configured together."
+            exit 1
+          fi
+
+      - name: Configure ad-hoc signing
+        if: ${{ env.APPLE_CERTIFICATE == '' }}
+        run: echo "APPLE_SIGNING_IDENTITY=-" >> "$GITHUB_ENV"
+
+      - name: Import Apple signing certificate
+        if: ${{ env.APPLE_CERTIFICATE != '' }}
+        shell: bash
+        run: |
+          certificate_path="$RUNNER_TEMP/orbit-certificate.p12"
+          keychain_path="$RUNNER_TEMP/orbit-signing.keychain-db"
+          keychain_password="$(openssl rand -hex 24)"
+
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$certificate_path"
+          security create-keychain -p "$keychain_password" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$keychain_password" "$keychain_path"
+          security import "$certificate_path" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$keychain_path"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain_path"
+          security list-keychain -d user -s "$keychain_path"
+
+          signing_identity="$(security find-identity -v -p codesigning "$keychain_path" | awk -F'"' '/[0-9]+\)/ { print $2; exit }')"
+          if [[ -z "$signing_identity" ]]; then
+            echo "::error::No code-signing identity was found in APPLE_CERTIFICATE."
+            exit 1
+          fi
+          echo "APPLE_SIGNING_IDENTITY=$signing_identity" >> "$GITHUB_ENV"
+
+      - name: Build DMG and create draft release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tauriScript: bun run tauri
+          tagName: ${{ env.RELEASE_TAG }}
+          releaseName: Orbit ${{ env.RELEASE_TAG }}
+          releaseBody: |
+            Download the universal macOS DMG below.
+
+            When Apple signing secrets are configured, this artifact is signed and notarized. Otherwise it uses an ad-hoc signature for internal testing.
+          releaseDraft: true
+          generateReleaseNotes: true
+          args: --target universal-apple-darwin --bundles app,dmg
+          releaseAssetNamePattern: "[name]_[version]_[platform]_[arch].[ext]"
