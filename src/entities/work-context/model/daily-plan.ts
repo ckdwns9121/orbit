@@ -14,6 +14,16 @@ export interface DailyPlanEntry {
   workItem: WorkItem;
 }
 
+export interface DailyPriority {
+  id: string;
+  planDate: string;
+  workItemId: string;
+  rank: number;
+  createdAt: string;
+  updatedAt: string;
+  workItem: WorkItem;
+}
+
 export function localDateKey(date: Date) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -69,4 +79,13 @@ export function shiftDailyPlanId(ids: string[], id: string, direction: -1 | 1) {
   const [moved] = next.splice(index, 1);
   next.splice(nextIndex, 0, moved);
   return next;
+}
+
+export function reorderDailyPriorityIds(ids: string[], fromId: string, toId: string) {
+  return reorderDailyPlanIds(ids, fromId, toId);
+}
+
+export function nextDailyPriorityRank(occupiedRanks: number[]) {
+  const occupied = new Set(occupiedRanks);
+  return [1, 2, 3].find((rank) => !occupied.has(rank)) ?? null;
 }
