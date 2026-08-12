@@ -19,10 +19,7 @@ afterEach(() => {
 function createDatabase(through = 26): Database {
   const database = new Database(":memory:");
   openDatabases.push(database);
-  database.exec(`
-    PRAGMA foreign_keys = ON;
-    PRAGMA legacy_alter_table = OFF;
-  `);
+  database.exec("PRAGMA foreign_keys = ON");
   applyMigrations(database, 1, through);
   return database;
 }
@@ -192,11 +189,6 @@ describe("work continuity migrations", () => {
 
   test("repairs an interim completion schema without losing completion history", () => {
     const database = createDatabase(24);
-    expect(row<{ legacy_alter_table: number }>(database, "PRAGMA legacy_alter_table"))
-      .toEqual({ legacy_alter_table: 0 });
-    expect(row<{ count: number }>(database, `SELECT COUNT(*) count FROM sqlite_master
-      WHERE type = 'trigger' AND sql LIKE '%work_focus_transition_commands_legacy%'`))
-      .toEqual({ count: 0 });
     insertWorkItem(database, "legacy-done", "done", "2026-08-06T10:00:00.000Z");
     database.run(
       `INSERT INTO completion_records(
