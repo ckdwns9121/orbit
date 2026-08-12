@@ -4,6 +4,7 @@ import { listWorkItems } from "../../entities/work-context/api/work-item-reposit
 import { getFocusSlot, switchFocusedWorkItem } from "../../entities/work-context/api/work-continuity-repository";
 import type { WorkItem } from "../../entities/work-context/model/work-item";
 import { notifyDueWorkItems } from "../../features/tasks/task-reminders";
+import { notifyDueStretchReminder } from "../../features/wellbeing/stretch-reminders";
 import "./TrayApp.scss";
 
 function formatTrayDate() {
@@ -45,9 +46,14 @@ export default function TrayApp() {
   }, [refresh]);
 
   useEffect(() => {
-    const checkReminders = () => void notifyDueWorkItems().catch((cause) => {
-      console.warn("목표 시간 알림을 확인하지 못했습니다.", cause);
-    });
+    const checkReminders = () => {
+      void notifyDueWorkItems().catch((cause) => {
+        console.warn("목표 시간 알림을 확인하지 못했습니다.", cause);
+      });
+      void notifyDueStretchReminder().catch((cause) => {
+        console.warn("스트레칭 알림을 확인하지 못했습니다.", cause);
+      });
+    };
     checkReminders();
     const interval = window.setInterval(checkReminders, 60_000);
     return () => window.clearInterval(interval);

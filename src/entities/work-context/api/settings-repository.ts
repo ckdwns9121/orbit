@@ -11,7 +11,10 @@ export type SettingKey =
   | "openai_model"
   | "glm_base_url"
   | "quick_panel_shortcut"
-  | "chat_shortcut";
+  | "chat_shortcut"
+  | "stretch_reminder_enabled"
+  | "stretch_reminder_interval_minutes"
+  | "stretch_reminder_next_at";
 
 export type AppSettings = Partial<Record<SettingKey, string>>;
 
@@ -27,14 +30,12 @@ export async function setAppSettings(settings: AppSettings): Promise<void> {
   const database = await getDatabase();
   const now = new Date().toISOString();
 
-  await Promise.all(
-    Object.entries(settings).map(([key, value]) =>
-      database.execute(
-        `INSERT INTO app_settings (key, value, updated_at)
-         VALUES ($1, $2, $3)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-        [key, value ?? "", now],
-      ),
-    ),
-  );
+  for (const [key, value] of Object.entries(settings)) {
+    await database.execute(
+      `INSERT INTO app_settings (key, value, updated_at)
+       VALUES ($1, $2, $3)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+      [key, value ?? "", now],
+    );
+  }
 }

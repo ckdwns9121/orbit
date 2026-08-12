@@ -4,6 +4,7 @@ import {
   Bot,
   Calendar,
   Command,
+  Dumbbell,
   Hash,
   KeyRound,
   Kanban,
@@ -43,6 +44,16 @@ import {
   setShortcutCaptureActive,
   syncGlobalShortcuts,
 } from "../../features/navigation/global-shortcuts";
+import {
+  requestStretchReminderPermission,
+  sendStretchReminderNotification,
+} from "../../features/wellbeing/stretch-reminders";
+import {
+  nextStretchReminderAt,
+  STRETCH_INTERVAL_OPTIONS,
+  stretchReminderPreferencesFromStored,
+  type StretchReminderPreferences,
+} from "../../entities/work-context/model/stretch-reminder";
 
 type SettingsTab = "general" | "shortcuts" | "jira" | "google" | "slack" | "ai";
 type SecretId =
@@ -148,10 +159,19 @@ export default function SettingsPage() {
         {activeTab === "general" && (
           <GeneralSettings
             theme={isThemePreference(settings.theme) ? settings.theme : "system"}
-            onChange={async (theme) => {
+            stretchReminder={stretchReminderPreferencesFromStored(settings)}
+            onThemeChange={async (theme) => {
               applyTheme(theme);
               updateSetting("theme", theme);
               await saveValues({ theme });
+            }}
+            onStretchReminderChange={async (preferences) => {
+              const values: AppSettings = {
+                stretch_reminder_enabled: String(preferences.enabled),
+                stretch_reminder_interval_minutes: String(preferences.intervalMinutes),
+                stretch_reminder_next_at: preferences.nextAt ?? "",
+              };
+              await saveValues(values);
             }}
           />
         )}
@@ -444,8 +464,20 @@ function formatSyncTime(value: string) {
   return new Intl.DateTimeFormat("ko-KR", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(value));
 }
 
-function GeneralSettings({ theme, onChange }: { theme: ThemePreference; onChange: (theme: ThemePreference) => Promise<void> }) {
+function GeneralSettings({
+  theme,
+  stretchReminder,
+  onThemeChange,
+  onStretchReminderChange,
+}: {
+  theme: ThemePreference;
+  stretchReminder: StretchReminderPreferences;
+  onThemeChange: (theme: ThemePreference) => Promise<void>;
+  onStretchReminderChange: (preferences: StretchReminderPreferences) => Promise<void>;
+}) {
   const [isSaving, setIsSaving] = useState(false);
+  const [isReminderSaving, setIsReminderSaving] = useState(false);
+  const [reminderMessage, setReminderMessage] = useState<string | null>(null);
   const options: Array<{ id: ThemePreference; label: string; preview: ReactNode }> = [
     { id: "system", label: "시스템 설정", preview: <><i /><i className="dark" /></> },
     { id: "light", label: "라이트", preview: <i /> },
@@ -466,7 +498,7 @@ function GeneralSettings({ theme, onChange }: { theme: ThemePreference; onChange
               disabled={isSaving}
               onClick={async () => {
                 setIsSaving(true);
-                try { await onChange(option.id); } finally { setIsSaving(false); }
+                try { await onThemeChange(option.id); } finally { setIsSaving(false); }
               }}
             >
               <span className="theme-preview">{option.preview}</span>
@@ -476,9 +508,95 @@ function GeneralSettings({ theme, onChange }: { theme: ThemePreference; onChange
           ))}
         </div>
       </div>
+      <div className="settings-card stretch-reminder-card" aria-busy={isReminderSaving}>
+        <div className="stretch-reminder-heading">
+          <span><Dumbbell size={17} strokeWidth={1.8} aria-hidden="true" /></span>
+          <div><strong>스트레칭 알림</strong><small>Orbit이 실행 중일 때 일정한 간격으로 Mac 알림을 보냅니다.</small></div>
+          <label className="settings-switch">
+            <span className="sr-only">스트레칭 알림 사용</span>
+            <input
+              type="checkbox"
+              checked={stretchReminder.enabled}
+              disabled={isReminderSaving}
+              onChange={async (event) => {
+                const enabled = event.target.checked;
+                setIsReminderSaving(true);
+                setReminderMessage(null);
+                try {
+                  if (enabled && !(await requestStretchReminderPermission())) {
+                    setReminderMessage("macOS 알림 권한을 허용해야 스트레칭 알림을 받을 수 있어요.");
+                    return;
+                  }
+                  await onStretchReminderChange({
+                    ...stretchReminder,
+                    enabled,
+                    nextAt: enabled ? nextStretchReminderAt(new Date(), stretchReminder.intervalMinutes) : null,
+                  });
+                  setReminderMessage(enabled ? "스트레칭 알림을 시작했어요." : "스트레칭 알림을 껐어요.");
+                } catch (cause) {
+                  setReminderMessage(toMessage(cause));
+                } finally {
+                  setIsReminderSaving(false);
+                }
+              }}
+            />
+            <i aria-hidden="true" />
+          </label>
+        </div>
+        <div className="stretch-reminder-controls">
+          <label>
+            <span>알림 주기</span>
+            <select
+              value={stretchReminder.intervalMinutes}
+              disabled={isReminderSaving}
+              onChange={async (event) => {
+                const intervalMinutes = Number(event.target.value);
+                setIsReminderSaving(true);
+                setReminderMessage(null);
+                try {
+                  await onStretchReminderChange({
+                    ...stretchReminder,
+                    intervalMinutes,
+                    nextAt: stretchReminder.enabled ? nextStretchReminderAt(new Date(), intervalMinutes) : null,
+                  });
+                  setReminderMessage(`${intervalMinutes}분 간격으로 저장했어요.`);
+                } catch (cause) {
+                  setReminderMessage(toMessage(cause));
+                } finally {
+                  setIsReminderSaving(false);
+                }
+              }}
+            >
+              {STRETCH_INTERVAL_OPTIONS.map((minutes) => <option value={minutes} key={minutes}>{minutes}분마다</option>)}
+            </select>
+          </label>
+          <div className="stretch-reminder-next">
+            <span>다음 알림</span>
+            <strong>{stretchReminder.enabled && stretchReminder.nextAt ? formatReminderTime(stretchReminder.nextAt) : "사용 안 함"}</strong>
+          </div>
+          <button
+            type="button"
+            disabled={isReminderSaving}
+            onClick={async () => {
+              setReminderMessage(null);
+              if (!(await requestStretchReminderPermission())) {
+                setReminderMessage("macOS 알림 권한을 허용해주세요.");
+                return;
+              }
+              sendStretchReminderNotification(true);
+              setReminderMessage("테스트 알림을 보냈어요.");
+            }}
+          >테스트 알림</button>
+        </div>
+        <p className="stretch-reminder-status" role="status" aria-live="polite">{reminderMessage}</p>
+      </div>
       <div className="security-note"><span><KeyRound size={15} strokeWidth={1.8} aria-hidden="true" /></span><div><strong>자격 증명 보안</strong><p>API 키와 토큰은 입력 중에만 폼에 존재하며, 저장할 때 SQLite가 아닌 macOS Keychain으로 전달됩니다.</p></div></div>
     </div>
   );
+}
+
+function formatReminderTime(value: string) {
+  return new Intl.DateTimeFormat("ko-KR", { hour: "2-digit", minute: "2-digit" }).format(new Date(value));
 }
 
 type Field = { key: keyof AppSettings; label: string; value: string; placeholder: string; type?: string };
