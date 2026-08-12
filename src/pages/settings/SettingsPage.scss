@@ -28,6 +28,27 @@
 .theme-preview i.dark { background: linear-gradient(90deg, #1f2126 27%, #292c32 27%); }
 .theme-options strong { font-size: 10px; }
 .theme-options em { min-width: 37px; color: var(--accent); font-size: 8px; font-style: normal; text-align: right; }
+.stretch-reminder-card { margin-top: 14px; }
+.stretch-reminder-heading { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; align-items: center; gap: 11px; }
+.stretch-reminder-heading > span { display: grid; place-items: center; width: 34px; height: 34px; color: var(--accent); background: var(--accent-soft); border-radius: 9px; }
+.stretch-reminder-heading > div { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
+.stretch-reminder-heading strong { font-size: 12px; }
+.stretch-reminder-heading small { color: var(--text-muted); font-size: 10px; line-height: 1.45; }
+.settings-switch { position: relative; display: block; width: 36px; height: 21px; }
+.settings-switch input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.settings-switch i { position: absolute; inset: 0; background: var(--border-strong); border-radius: 999px; transition: background 160ms ease; }
+.settings-switch i::after { content: ""; position: absolute; top: 3px; left: 3px; width: 15px; height: 15px; background: #fff; border-radius: 50%; box-shadow: 0 1px 3px rgba(0, 0, 0, .18); transition: transform 160ms ease; }
+.settings-switch input:checked + i { background: var(--accent); }
+.settings-switch input:checked + i::after { transform: translateX(15px); }
+.settings-switch input:focus-visible + i { box-shadow: 0 0 0 3px var(--accent-ring); }
+.settings-switch input:disabled + i { opacity: .55; }
+.stretch-reminder-controls { display: grid; grid-template-columns: minmax(130px, 1fr) minmax(120px, 1fr) auto; align-items: end; gap: 10px; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border); }
+.stretch-reminder-controls label,.stretch-reminder-next { display: flex; min-width: 0; flex-direction: column; gap: 6px; }
+.stretch-reminder-controls label > span,.stretch-reminder-next > span { color: var(--text-muted); font-size: 9px; font-weight: 650; }
+.stretch-reminder-controls select { width: 100%; height: 34px; }
+.stretch-reminder-next strong { min-height: 34px; display: flex; align-items: center; font-size: 11px; }
+.stretch-reminder-controls > button { height: 34px; white-space: nowrap; }
+.stretch-reminder-status { min-height: 15px; margin: 10px 0 0; color: var(--text-muted); font-size: 9px; }
 .security-note { display: flex; gap: 12px; margin-top: 14px; padding: 15px 17px; background: var(--subtle); border-radius: $radius-medium; }
 .security-note > span { display: flex; align-items: center; flex-shrink: 0; width: 15px; height: 15px; color: var(--accent); }
 .security-note strong { font-size: 11px; }
@@ -75,4 +96,13 @@
 @media (max-width: 1050px) {
   .settings-page { grid-template-columns: 180px minmax(0, 1fr); }
   .settings-content { padding-inline: 28px; }
+}
+
+@media (max-width: 720px) {
+  .stretch-reminder-controls { grid-template-columns: 1fr 1fr; }
+  .stretch-reminder-controls > button { grid-column: 1 / -1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-switch i,.settings-switch i::after { transition: none; }
 }
