@@ -5,6 +5,7 @@ import {
   includesCompletedSearchText,
   pageRange,
   presentFreshness,
+  skippedCompletionValues,
   validateCompletion,
   validateInterruption,
 } from "../../../features/tasks/work-continuity";
@@ -62,6 +63,16 @@ describe("continuity presenters", () => {
     expect(Object.keys(validateCompletion({ resultSummary: "", decisions: "", remainingRisks: "", retrospective: "" }))).toEqual([
       "resultSummary", "decisions", "remainingRisks", "retrospective",
     ]);
+  });
+
+  test("marks a skipped reflection explicitly without inventing completion details", () => {
+    expect(validateCompletion(skippedCompletionValues)).toEqual({});
+    expect(skippedCompletionValues).toEqual({
+      resultSummary: "사용자가 완료 회고 작성을 건너뛰었습니다.",
+      decisions: "기록하지 않음",
+      remainingRisks: "확인하지 않음",
+      retrospective: "기록하지 않음",
+    });
   });
 
   test("presents freshness errors without hiding stale cache age", () => {

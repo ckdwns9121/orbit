@@ -2,7 +2,6 @@
 -- Rebuilding this receipt table is safe: consumed rows contain no continuity
 -- payload and no other table references it.
 DROP TRIGGER IF EXISTS work_focus_command_apply;
-DROP TRIGGER IF EXISTS work_items_transition_guard;
 DROP INDEX IF EXISTS work_focus_commands_status_time;
 DROP INDEX IF EXISTS work_focus_commands_current;
 DROP INDEX IF EXISTS work_focus_commands_requested;
@@ -47,47 +46,6 @@ CREATE INDEX work_focus_commands_current
   ON work_focus_transition_commands(current_work_item_id, created_at DESC);
 CREATE INDEX work_focus_commands_requested
   ON work_focus_transition_commands(requested_work_item_id, created_at DESC);
-
-CREATE TRIGGER work_items_transition_guard
-BEFORE UPDATE OF status, checkpoint, next_action, blocked_reason, resume_condition, next_review_at, revision
-ON work_items
-FOR EACH ROW
-WHEN NEW.status IS NOT OLD.status
-  OR NEW.checkpoint IS NOT OLD.checkpoint
-  OR NEW.next_action IS NOT OLD.next_action
-  OR NEW.blocked_reason IS NOT OLD.blocked_reason
-  OR NEW.resume_condition IS NOT OLD.resume_condition
-  OR NEW.next_review_at IS NOT OLD.next_review_at
-BEGIN
-  SELECT CASE WHEN NEW.revision <> OLD.revision + 1
-    THEN RAISE(ABORT, 'work_item_revision_conflict') END;
-  SELECT CASE WHEN NEW.status = 'blocked'
-      AND (length(trim(COALESCE(NEW.blocked_reason, ''))) = 0
-        OR length(trim(COALESCE(NEW.resume_condition, ''))) = 0)
-    THEN RAISE(ABORT, 'blocked_requires_reason_and_resume_condition') END;
-  SELECT CASE WHEN OLD.status = 'focus' AND NEW.status <> 'focus' AND NEW.status <> 'done'
-      AND (length(trim(COALESCE(NEW.checkpoint, ''))) = 0
-        OR length(trim(COALESCE(NEW.next_action, ''))) = 0)
-    THEN RAISE(ABORT, 'focus_release_requires_checkpoint_and_next_action') END;
-  SELECT CASE WHEN OLD.status = 'focus' AND NEW.status <> 'focus' AND NEW.status <> 'done'
-      AND NOT EXISTS (
-        SELECT 1 FROM work_focus_transition_commands c
-        WHERE c.correlation_id = NEW.transition_correlation_id AND c.status = 'pending'
-      )
-    THEN RAISE(ABORT, 'focus_release_requires_command') END;
-  SELECT CASE WHEN NEW.status = 'done' AND OLD.status <> 'done'
-      AND NOT EXISTS (
-        SELECT 1 FROM completion_records c
-        WHERE c.work_item_id = NEW.id AND c.state = 'active'
-      )
-    THEN RAISE(ABORT, 'done_requires_completion_record') END;
-  SELECT CASE WHEN NEW.status = 'focus' AND OLD.status <> 'focus'
-      AND NOT EXISTS (
-        SELECT 1 FROM work_focus_transition_commands c
-        WHERE c.correlation_id = NEW.transition_correlation_id AND c.status = 'pending'
-      )
-    THEN RAISE(ABORT, 'focus_requires_command') END;
-END;
 
 CREATE TRIGGER work_focus_command_apply
 AFTER INSERT ON work_focus_transition_commands
