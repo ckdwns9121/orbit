@@ -47,7 +47,6 @@ import {
 type SettingsTab = "general" | "shortcuts" | "jira" | "google" | "slack" | "ai";
 type SecretId =
   | "jira_api_token"
-  | "google_client_secret"
   | "slack_oauth_token"
   | "openai_api_key"
   | "claude_api_key"
@@ -64,7 +63,6 @@ const tabs: Array<{ id: SettingsTab; label: string; icon: LucideIcon }> = [
 
 const secretIds: SecretId[] = [
   "jira_api_token",
-  "google_client_secret",
   "slack_oauth_token",
   "openai_api_key",
   "claude_api_key",
@@ -73,7 +71,6 @@ const secretIds: SecretId[] = [
 
 const emptySecretStatus: Record<SecretId, boolean> = {
   jira_api_token: false,
-  google_client_secret: false,
   slack_oauth_token: false,
   openai_api_key: false,
   claude_api_key: false,
@@ -194,14 +191,8 @@ export default function SettingsPage() {
         )}
         {activeTab === "google" && (
           <GoogleCalendarSettings
-            clientId={settings.google_client_id ?? ""}
-            isSecretSaved={secretStatus.google_client_secret}
-            onClientIdChange={(value) => updateSetting("google_client_id", value)}
-            onSave={async (clientId, secret) => {
-              await saveValues({ google_client_id: clientId });
-              if (secret) await saveSecret("google_client_secret", secret);
-            }}
             onError={(cause) => setError(toMessage(cause))}
+            onClearError={() => setError(null)}
           />
         )}
         {activeTab === "slack" && (
@@ -376,30 +367,25 @@ function SlackSettings({ isSecretSaved, storedConnection, onSaveToken, onVerifie
 }
 
 function GoogleCalendarSettings({
-  clientId,
-  isSecretSaved,
-  onClientIdChange,
-  onSave,
   onError,
+  onClearError,
 }: {
-  clientId: string;
-  isSecretSaved: boolean;
-  onClientIdChange: (value: string) => void;
-  onSave: (clientId: string, secret: string) => Promise<void>;
   onError: (cause: unknown) => void;
+  onClearError: () => void;
 }) {
   const [connection, setConnection] = useState<GoogleCalendarConnection | null>(null);
-  const [secret, setSecret] = useState("");
+  const [isConnectionLoading, setIsConnectionLoading] = useState(true);
   const [busyAction, setBusyAction] = useState<"connect" | "sync" | "disconnect" | null>(null);
   const [message, setMessage] = useState("");
 
   useEffect(() => {
-    void getGoogleCalendarConnection().then(setConnection).catch(onError);
+    void getGoogleCalendarConnection().then(setConnection).catch(onError).finally(() => setIsConnectionLoading(false));
   }, []);
 
   async function run(action: "connect" | "sync" | "disconnect") {
     setBusyAction(action);
     setMessage("");
+    onClearError();
     try {
       if (action === "disconnect") {
         await disconnectGoogleCalendar();
@@ -407,15 +393,12 @@ function GoogleCalendarSettings({
         setMessage("Google Calendar 연결을 해제했습니다.");
         return;
       }
-      if (!clientId.trim()) throw new Error("Google OAuth Client ID를 입력해주세요.");
-      await onSave(clientId.trim(), secret.trim());
-      setSecret("");
       if (action === "connect") {
-        setConnection(await connectGoogleCalendar(clientId.trim()));
-        setMessage("계정 연결과 첫 일정 동기화를 완료했습니다.");
+        setConnection(await connectGoogleCalendar());
+        setMessage("Google 계정을 연결하고 일정을 동기화했습니다.");
       } else {
-        setConnection(await syncGoogleCalendar(clientId.trim()));
-        setMessage("Google Calendar를 최신 상태로 동기화했습니다.");
+        setConnection(await syncGoogleCalendar());
+        setMessage("일정을 최신 상태로 동기화했습니다.");
       }
     } catch (cause) {
       const storedConnection = await getGoogleCalendarConnection().catch(() => null);
@@ -429,33 +412,30 @@ function GoogleCalendarSettings({
   return (
     <div className="settings-section">
       <header>
-        <span>GOOGLE OAUTH</span>
-        <h2>Google Calendar 연결</h2>
-        <p>Google 계정으로 로그인하면 일정 제목, 시간, 장소를 읽기 전용으로 가져옵니다. 수정하거나 삭제하지 않습니다.</p>
+        <span>GOOGLE CALENDAR</span>
+        <h2>Google Calendar</h2>
+        <p>Google 계정을 연결하면 일정 제목, 시간, 장소를 Orbit으로 가져옵니다. Orbit에서는 Google 일정을 수정하거나 삭제하지 않습니다.</p>
       </header>
-      <div className="provider-form google-calendar-form">
+      <div className="provider-form google-calendar-form" aria-busy={busyAction !== null || isConnectionLoading}>
         <div className="connection-status">
-          <span className={connection ? "connected" : ""} />
+          <span className={connection ? "connected" : ""} aria-hidden="true" />
           <div>
-            <strong>{connection ? "Google Calendar 연결됨" : "Google 계정 연결 안 됨"}</strong>
-            <small>{connection ? connection.email : "OAuth 클라이언트 정보를 저장한 뒤 로그인하세요"}</small>
+            <strong>{isConnectionLoading ? "연결 상태 확인 중" : connection ? "Google Calendar 연결됨" : "연결된 Google 계정 없음"}</strong>
+            <small>{connection ? connection.email : "브라우저에서 Google 계정에 로그인해 연결하세요."}</small>
           </div>
-          {connection?.lastSyncedAt && <time>최근 동기화 {formatSyncTime(connection.lastSyncedAt)}</time>}
+          {connection?.lastSyncedAt && <time dateTime={connection.lastSyncedAt}>최근 동기화 {formatSyncTime(connection.lastSyncedAt)}</time>}
         </div>
-        <label>OAuth Client ID<input value={clientId} placeholder="…apps.googleusercontent.com" onChange={(event) => onClientIdChange(event.target.value)} /></label>
-        <label>OAuth Client Secret <em>선택</em><div className="secret-field"><input type="password" value={secret} autoComplete="off" placeholder={isSecretSaved ? "저장됨 · 변경할 때만 입력" : "Desktop OAuth 시크릿 (선택)"} onChange={(event) => setSecret(event.target.value)} />{isSecretSaved && <span>••••••••</span>}</div></label>
-        <p className="secret-help">Google Cloud에서 OAuth 동의 화면과 ‘데스크톱 앱’ 클라이언트를 만든 뒤 입력하세요. 갱신 토큰과 시크릿은 macOS Keychain에만 저장됩니다.</p>
         <div className="provider-actions google-actions">
-          {connection && <button type="button" className="danger-button" disabled={busyAction !== null} onClick={() => void run("disconnect")}>{busyAction === "disconnect" ? "해제 중…" : "연결 해제"}</button>}
-          <span>{message}</span>
+          {connection && <button type="button" className="danger-button" disabled={busyAction !== null || isConnectionLoading} onClick={() => void run("disconnect")}>{busyAction === "disconnect" ? "해제 중…" : "연결 해제"}</button>}
+          <span role="status" aria-live="polite">{message}</span>
           {connection ? (
-            <button type="button" className="primary-button" disabled={busyAction !== null} onClick={() => void run("sync")}>{busyAction === "sync" ? "동기화 중…" : "지금 동기화"}</button>
+            <button type="button" className="primary-button" disabled={busyAction !== null || isConnectionLoading} onClick={() => void run("sync")}>{busyAction === "sync" ? "동기화 중…" : "지금 동기화"}</button>
           ) : (
-            <button type="button" className="primary-button" disabled={busyAction !== null || !clientId.trim()} onClick={() => void run("connect")}>{busyAction === "connect" ? "브라우저 로그인 대기 중…" : "Google 계정 연결"}</button>
+            <button type="button" className="primary-button" disabled={busyAction !== null || isConnectionLoading} onClick={() => void run("connect")}>{busyAction === "connect" ? "브라우저에서 로그인하는 중…" : "Google 계정 연결"}</button>
           )}
         </div>
       </div>
-      <div className="security-note"><span><Calendar size={15} strokeWidth={1.8} aria-hidden="true" /></span><div><strong>Google Cloud 준비</strong><p>Google Calendar API를 활성화하고 OAuth 클라이언트 유형을 ‘데스크톱 앱’으로 만드세요. 리디렉션은 로그인할 때 Orbit이 localhost 포트를 자동으로 엽니다.</p></div></div>
+      <div className="security-note"><span><KeyRound size={15} strokeWidth={1.8} aria-hidden="true" /></span><div><strong>읽기 전용으로 안전하게 연결</strong><p>로그인은 기본 브라우저에서 진행되며 갱신 토큰은 이 Mac의 Keychain에만 저장됩니다. 연결을 해제하면 Orbit에 저장된 로그인 정보와 Google 일정 캐시가 삭제되고, Google Calendar 원본은 변경되지 않습니다.</p></div></div>
     </div>
   );
 }

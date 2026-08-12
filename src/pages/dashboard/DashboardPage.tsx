@@ -148,8 +148,13 @@ export default function DashboardPage({
 
   async function createPlannedTask(input: { title: string; categoryId: string | null; targetAt: string | null }) {
     const id = await createWorkItem({ title: input.title, status: "todo", categoryId: input.categoryId, targetAt: input.targetAt });
+    // A Planner item is a canonical Task first. Publish it to the app state
+    // immediately so a later calendar-link failure cannot leave the board stale.
+    await onChanged();
     await addWorkItemToDailyPlan(id, selectedKey);
-    await Promise.all([refresh(), onChanged()]);
+    // Planner refresh may materialize routines and write to SQLite, so keep it
+    // sequential with the app-wide read instead of running both concurrently.
+    await refresh();
   }
 
   async function refreshPriorities() {

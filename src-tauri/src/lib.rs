@@ -105,21 +105,6 @@ fn get_secret(secret_id: &str) -> Result<String, String> {
     }
 }
 
-fn get_optional_secret(secret_id: &str) -> Result<Option<String>, String> {
-    validate_secret_id(secret_id)?;
-    if let Some(value) = cached_secret(secret_id)? {
-        return Ok(Some(value));
-    }
-    match keychain_entry(secret_id)?.get_password() {
-        Ok(value) if !value.is_empty() => {
-            cache_secret(secret_id, &value)?;
-            Ok(Some(value))
-        }
-        Ok(_) | Err(keyring::Error::NoEntry) => Ok(None),
-        Err(error) => Err(error.to_string()),
-    }
-}
-
 #[tauri::command]
 fn secret_status(secret_id: String) -> Result<bool, String> {
     validate_secret_id(&secret_id)?;

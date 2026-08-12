@@ -48,6 +48,7 @@
 - [ADR-004 완료 기록과 근거 스냅샷의 원자적 저장](<ADR/[ADR-004] 완료 기록과 근거 스냅샷의 원자적 저장.md>)
 - [ADR-005 Context Graph를 재구축 가능한 Projection으로 운영](<ADR/[ADR-005] Context Graph를 재구축 가능한 Projection으로 운영.md>)
 - [ADR-006 프런트엔드 FSD 의존 방향 적용](<ADR/[ADR-006] 프런트엔드 FSD 의존 방향 적용.md>)
+- [ADR-007 Google Calendar에 공용 데스크톱 OAuth 클라이언트 사용](<ADR/[ADR-007] Google Calendar에 공용 데스크톱 OAuth 클라이언트 사용.md>)
 
 ### 상세 설계와 검증
 
