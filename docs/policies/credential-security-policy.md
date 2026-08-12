@@ -11,9 +11,14 @@
 5. 외부 로그인은 시스템 브라우저와 native app OAuth 흐름을 사용하며 embedded webview 로그인을 사용하지 않는다.
 6. 배포 빌드는 안정된 Apple 코드서명을 사용한다. ad-hoc 개발 빌드의 Keychain 반복 승인은 제품의 정상 인증 경험으로 간주하지 않는다.
 7. secret 삭제는 해당 provider 연결 상태와 process cache를 함께 무효화한다.
+8. 설치형 앱의 OAuth Client ID는 secret으로 취급하지 않고 Orbit 배포본에 포함할 수 있다. 각 사용자는 자신의 Google 계정으로 승인하며 사용자별 refresh token만 Keychain에 저장한다.
+9. 설치형 앱에 OAuth client secret을 배포하거나 사용자에게 Google Cloud 프로젝트 생성을 요구하지 않는다.
+10. Google Calendar 권한은 현재 제품 기능에 필요한 읽기 전용 event scope로 제한한다.
 
 ## 근거
 
 - `src-tauri/src/lib.rs`
 - `src/entities/work-context/api/completion-repository.ts`
 - `src/entities/work-context/api/context-graph-repository.ts`
+- `src-tauri/src/google_calendar.rs`
+- [ADR-007 Google Calendar에 공용 데스크톱 OAuth 클라이언트 사용](<../ADR/[ADR-007] Google Calendar에 공용 데스크톱 OAuth 클라이언트 사용.md>)

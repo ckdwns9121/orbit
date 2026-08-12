@@ -4,7 +4,6 @@ export type SettingKey =
   | "theme"
   | "jira_url"
   | "jira_email"
-  | "google_client_id"
   | "slack_workspace"
   | "slack_workspace_id"
   | "slack_user_name"

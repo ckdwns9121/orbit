@@ -13,7 +13,10 @@ const AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const USER_INFO_URL: &str = "https://www.googleapis.com/oauth2/v2/userinfo";
 const EVENTS_URL: &str = "https://www.googleapis.com/calendar/v3/calendars/primary/events";
-const CALENDAR_SCOPE: &str = "openid email https://www.googleapis.com/auth/calendar.readonly";
+const CALENDAR_SCOPE: &str =
+    "openid email https://www.googleapis.com/auth/calendar.events.readonly";
+const GOOGLE_OAUTH_CLIENT_ID: &str =
+    "995704849590-4mv8lvi66s9b9jbgc5vl1krab1a0ic20.apps.googleusercontent.com";
 const REFRESH_TOKEN_SECRET_ID: &str = "google_refresh_token";
 
 #[derive(Serialize)]
@@ -95,16 +98,7 @@ fn confirmed_status() -> String {
 }
 
 #[tauri::command]
-pub async fn connect_google_calendar(
-    app: AppHandle,
-    client_id: String,
-    client_secret: Option<String>,
-) -> Result<GoogleOAuthResult, String> {
-    validate_client_id(&client_id)?;
-    let client_secret = client_secret
-        .filter(|value| !value.trim().is_empty())
-        .or(super::get_optional_secret("google_client_secret")?);
-
+pub async fn connect_google_calendar(app: AppHandle) -> Result<GoogleOAuthResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let listener = TcpListener::bind("127.0.0.1:0")
             .map_err(|error| format!("Google 로그인 콜백 포트를 열지 못했습니다. ({error})"))?;
@@ -122,7 +116,7 @@ pub async fn connect_google_calendar(
         let mut auth_url = reqwest::Url::parse(AUTH_URL).map_err(|error| error.to_string())?;
         auth_url
             .query_pairs_mut()
-            .append_pair("client_id", client_id.trim())
+            .append_pair("client_id", GOOGLE_OAUTH_CLIENT_ID)
             .append_pair("redirect_uri", &redirect_uri)
             .append_pair("response_type", "code")
             .append_pair("scope", CALENDAR_SCOPE)
@@ -139,16 +133,13 @@ pub async fn connect_google_calendar(
 
         let code = wait_for_oauth_callback(listener, &redirect_uri, &state)?;
         let client = http_client()?;
-        let mut form = vec![
-            ("client_id", client_id.trim().to_string()),
+        let form = vec![
+            ("client_id", GOOGLE_OAUTH_CLIENT_ID.to_string()),
             ("code", code),
             ("code_verifier", verifier),
             ("grant_type", "authorization_code".into()),
             ("redirect_uri", redirect_uri),
         ];
-        if let Some(secret) = client_secret {
-            form.push(("client_secret", secret));
-        }
         let token: TokenResponse = send_token_request(&client, &form)?;
         let refresh_token = token.refresh_token.ok_or_else(|| {
             "Google에서 갱신 토큰을 보내지 않았습니다. 연결을 해제한 뒤 다시 로그인해주세요."
@@ -175,27 +166,18 @@ pub async fn connect_google_calendar(
 
 #[tauri::command]
 pub async fn sync_google_calendar(
-    client_id: String,
-    client_secret: Option<String>,
     sync_token: Option<String>,
     time_min: Option<String>,
     time_max: Option<String>,
 ) -> Result<GoogleCalendarSyncResult, String> {
-    validate_client_id(&client_id)?;
     tauri::async_runtime::spawn_blocking(move || {
         let refresh_token = super::get_secret(REFRESH_TOKEN_SECRET_ID)?;
         let client = http_client()?;
-        let mut form = vec![
-            ("client_id", client_id.trim().to_string()),
+        let form = vec![
+            ("client_id", GOOGLE_OAUTH_CLIENT_ID.to_string()),
             ("refresh_token", refresh_token),
             ("grant_type", "refresh_token".into()),
         ];
-        let client_secret = client_secret
-            .filter(|value| !value.trim().is_empty())
-            .or(super::get_optional_secret("google_client_secret")?);
-        if let Some(secret) = client_secret {
-            form.push(("client_secret", secret));
-        }
         let token: TokenResponse = send_token_request(&client, &form)?;
         fetch_events(&client, &token.access_token, sync_token, time_min, time_max)
     })
@@ -205,7 +187,8 @@ pub async fn sync_google_calendar(
 
 #[tauri::command]
 pub fn disconnect_google_calendar() -> Result<(), String> {
-    super::delete_internal_secret(REFRESH_TOKEN_SECRET_ID)
+    super::delete_internal_secret(REFRESH_TOKEN_SECRET_ID)?;
+    super::delete_internal_secret("google_client_secret")
 }
 
 fn fetch_events(
@@ -372,16 +355,6 @@ fn wait_for_oauth_callback(
     Err("Google 로그인이 3분 안에 완료되지 않았습니다.".into())
 }
 
-fn validate_client_id(client_id: &str) -> Result<(), String> {
-    if client_id.trim().is_empty() {
-        return Err("Google OAuth Client ID를 입력해주세요.".into());
-    }
-    if !client_id.trim().ends_with(".apps.googleusercontent.com") {
-        return Err("Google Cloud의 데스크톱 앱 OAuth Client ID를 입력해주세요.".into());
-    }
-    Ok(())
-}
-
 fn http_client() -> Result<Client, String> {
     Client::builder()
         .timeout(Duration::from_secs(30))
@@ -513,8 +486,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_non_desktop_google_client_id() {
-        assert!(validate_client_id("123.example.com").is_err());
-        assert!(validate_client_id("123.apps.googleusercontent.com").is_ok());
+    fn shared_google_client_id_is_a_desktop_client() {
+        assert!(GOOGLE_OAUTH_CLIENT_ID.ends_with(".apps.googleusercontent.com"));
     }
 }

@@ -6,7 +6,6 @@ import { refreshAssignedJiraIssues } from "../../../../entities/work-context/api
 import { searchSlackMessages } from "../../../../entities/work-context/api/slack-message-repository";
 import { searchConfluencePages } from "../../../../entities/work-context/api/confluence-page-repository";
 import { getDatabase } from "../../../../entities/work-context/api/database";
-import { getAppSettings } from "../../../../entities/work-context/api/settings-repository";
 import { getSourceSyncState, runScopedSourceRefresh } from "../../../../entities/work-context/api/source-sync-repository";
 import { normalizeSourceScope, sourceDefinitions } from "../../../../entities/work-context/model/source-capability";
 
@@ -62,15 +61,13 @@ export async function refreshConnectedSource(
       return result.state;
     }
     case "calendar": {
-      const settings = await getAppSettings();
-      if (!settings.google_client_id) throw new Error("Settings에서 Google OAuth Client ID를 입력해주세요.");
       const result = await runScopedSourceRefresh({
         source: "calendar",
         scopeKey: "global",
         ttlMs: sourceDefinitions.calendar.ttlMs,
         force,
         refresh: async () => {
-          await syncGoogleCalendar(settings.google_client_id!);
+          await syncGoogleCalendar();
           const database = await getDatabase();
           const rows = await database.select<Array<{ count: number }>>(
             "SELECT COUNT(*) AS count FROM calendar_events WHERE source = 'google'",
