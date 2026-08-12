@@ -169,6 +169,10 @@ Apple 인증서가 없으면 내부 테스트용 ad-hoc 서명을 사용합니�
 
 ## 문서
 
+- [문서 지도와 의사결정 절차](docs/README.md)
+- [Orbit 업무 연속성 PRD](docs/prd/prd-orbit-work-continuity.md)
+- [Orbit 업무 연속성 Spec](docs/prd/spec-orbit-work-continuity.md)
+- [제품 원칙](docs/product/product-principles.md)
 - [제품 문제 정의](docs/product-problem.md)
 - [제품 솔루션](docs/product-solution.md)
 - [Context Graph Architecture](docs/context-graph-architecture.md)

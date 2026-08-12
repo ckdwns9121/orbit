@@ -132,6 +132,13 @@ export function validateCompletion(input: {
   return errors;
 }
 
+export const skippedCompletionValues = {
+  resultSummary: "사용자가 완료 회고 작성을 건너뛰었습니다.",
+  decisions: "기록하지 않음",
+  remainingRisks: "확인하지 않음",
+  retrospective: "기록하지 않음",
+} as const;
+
 export type FreshnessLike = {
   source: string;
   status: string;

@@ -2,7 +2,7 @@ import { useState, type FormEvent } from "react";
 import { CheckCircle2, FileText, Link2, LockKeyhole, X } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { WorkItem, WorkItemStatus } from "../../../../entities/work-context/model/work-item";
-import { validateCompletion, validateInterruption } from "../model";
+import { skippedCompletionValues, validateCompletion, validateInterruption } from "../model";
 import "./style.scss";
 
 export type InterruptionValues = {
@@ -139,10 +139,16 @@ export function CompletionSheet({
     try { await onComplete(values); } finally { setIsSaving(false); }
   }
 
+  async function skip() {
+    setErrors({});
+    setIsSaving(true);
+    try { await onComplete({ ...skippedCompletionValues }); } finally { setIsSaving(false); }
+  }
+
   return (
     <div className="modal-backdrop checkpoint-backdrop" role="presentation">
-      <form className="continuity-dialog completion-sheet" aria-labelledby="completion-title" onSubmit={submit}>
-        <header><div><span>완료 기록</span><h2 id="completion-title">{item.title}</h2><p>결과와 판단을 남기면 다음 작업과 회고에서 다시 찾을 수 있어요.</p></div><button type="button" aria-label="닫기" onClick={onCancel}><X size={17} /></button></header>
+      <form className="continuity-dialog completion-sheet" role="dialog" aria-modal="true" aria-labelledby="completion-title" onSubmit={submit}>
+        <header><div><span>완료 기록</span><h2 id="completion-title">{item.title}</h2><p>결과와 판단을 남기면 다음 작업과 회고에서 다시 찾을 수 있어요.</p></div><button type="button" aria-label="닫기" onClick={onCancel} disabled={isSaving}><X size={17} /></button></header>
         <div className="completion-evidence-summary"><CheckCircle2 size={15} /><div><strong>{evidence.length}개의 연결 근거를 함께 보관합니다</strong><span>Jira, PR, commit, AI 세션 링크는 완료 시점의 스냅샷으로 저장됩니다.</span></div></div>
         <div className="continuity-form-grid completion-grid">
           <Field label="결과 요약" required error={errors.resultSummary}><textarea value={values.resultSummary} onChange={(event) => change("resultSummary", event.target.value)} autoFocus /></Field>
@@ -150,7 +156,11 @@ export function CompletionSheet({
           <Field label="남은 위험" required error={errors.remainingRisks}><textarea value={values.remainingRisks} onChange={(event) => change("remainingRisks", event.target.value)} /></Field>
           <Field label="다음에 다르게 할 점" required error={errors.retrospective}><textarea value={values.retrospective} onChange={(event) => change("retrospective", event.target.value)} /></Field>
         </div>
-        <footer><button type="button" onClick={onCancel}>취소</button><button className="primary-button" type="submit" disabled={isSaving}>{isSaving ? "완료 기록 저장 중…" : "기록하고 완료"}</button></footer>
+        <footer>
+          <button className="completion-skip-button" type="button" aria-label="완료 기록 없이 완료" onClick={() => void skip()} disabled={isSaving}>{isSaving ? "완료 처리 중…" : "건너뛰고 완료"}</button>
+          <button type="button" onClick={onCancel} disabled={isSaving}>취소</button>
+          <button className="primary-button" type="submit" disabled={isSaving}>{isSaving ? "완료 처리 중…" : "기록하고 완료"}</button>
+        </footer>
       </form>
     </div>
   );
