@@ -53,11 +53,8 @@ export async function getGoogleCalendarConnection(): Promise<GoogleCalendarConne
   return row ? { email: row.account_email, connectedAt: row.connected_at, lastSyncedAt: row.last_synced_at } : null;
 }
 
-export async function connectGoogleCalendar(clientId: string): Promise<GoogleCalendarConnection> {
-  const result = await invoke<GoogleOAuthResult>("connect_google_calendar", {
-    clientId: clientId.trim(),
-    clientSecret: null,
-  });
+export async function connectGoogleCalendar(): Promise<GoogleCalendarConnection> {
+  const result = await invoke<GoogleOAuthResult>("connect_google_calendar");
   const now = new Date().toISOString();
   const database = await getDatabase();
   await database.execute(
@@ -71,11 +68,11 @@ export async function connectGoogleCalendar(clientId: string): Promise<GoogleCal
     [PRIMARY_CALENDAR_ID, result.email, now],
   );
   await database.execute("DELETE FROM calendar_events WHERE source = 'google'");
-  await syncGoogleCalendar(clientId);
+  await syncGoogleCalendar();
   return (await getGoogleCalendarConnection())!;
 }
 
-export async function syncGoogleCalendar(clientId: string): Promise<GoogleCalendarConnection> {
+export async function syncGoogleCalendar(): Promise<GoogleCalendarConnection> {
   const database = await getDatabase();
   const rows = await database.select<GoogleCalendarSyncRow[]>(
     `SELECT account_email, sync_token, connected_at, last_synced_at
@@ -87,8 +84,6 @@ export async function syncGoogleCalendar(clientId: string): Promise<GoogleCalend
 
   const initialRange = getInitialSyncRange();
   const result = await invoke<GoogleCalendarSyncResult>("sync_google_calendar", {
-    clientId: clientId.trim(),
-    clientSecret: null,
     syncToken: state.sync_token,
     timeMin: state.sync_token ? null : initialRange.timeMin,
     timeMax: state.sync_token ? null : initialRange.timeMax,
@@ -100,7 +95,7 @@ export async function syncGoogleCalendar(clientId: string): Promise<GoogleCalend
       "UPDATE google_calendar_sync SET sync_token = NULL WHERE calendar_id = $1",
       [PRIMARY_CALENDAR_ID],
     );
-    return syncGoogleCalendar(clientId);
+    return syncGoogleCalendar();
   }
 
   const now = new Date().toISOString();

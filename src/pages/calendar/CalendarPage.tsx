@@ -6,7 +6,6 @@ import {
   syncGoogleCalendar,
   type GoogleCalendarConnection,
 } from "../../entities/work-context/api/google-calendar-repository";
-import { getAppSettings } from "../../entities/work-context/api/settings-repository";
 import {
   addDays,
   isSameDay,
@@ -71,11 +70,11 @@ export default function CalendarPage() {
 
   async function refreshGoogle(force: boolean) {
     try {
-      const [connection, settings] = await Promise.all([getGoogleCalendarConnection(), getAppSettings()]);
+      const connection = await getGoogleCalendarConnection();
       setGoogleConnection(connection);
-      if (!connection || !settings.google_client_id || (!force && !shouldAutoSyncGoogleCalendar(connection))) return;
+      if (!connection || (!force && !shouldAutoSyncGoogleCalendar(connection))) return;
       setIsSyncingGoogle(true);
-      const updated = await syncGoogleCalendar(settings.google_client_id);
+      const updated = await syncGoogleCalendar();
       setGoogleConnection(updated);
       await refresh();
     } catch (cause) {
