@@ -188,7 +188,7 @@ describe("work continuity migrations", () => {
   });
 
   test("repairs an interim completion schema without losing completion history", () => {
-    const database = createDatabase(24);
+    const database = createDatabase(23);
     insertWorkItem(database, "legacy-done", "done", "2026-08-06T10:00:00.000Z");
     database.run(
       `INSERT INTO completion_records(
@@ -197,6 +197,8 @@ describe("work continuity migrations", () => {
       ) VALUES ('legacy-record', 'legacy-done', 'Preserved result', 'legacy-inferred', 0, ?, ?)`,
       ["2026-08-06T10:00:00.000Z", "2026-08-06T10:00:00.000Z"],
     );
+
+    applyMigrations(database, 24, 24);
 
     database.exec(`
       DROP TRIGGER completion_record_apply;
