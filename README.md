@@ -21,6 +21,7 @@ Orbit은 단순한 할 일 목록이 아닙니다. 업무를 전환할 때 사�
 - [왜 Orbit인가](#왜-orbit인가)
 - [핵심 사용 흐름](#핵심-사용-흐름)
 - [주요 기능](#주요-기능)
+- [기능 화면](#기능-화면)
 - [연동 현황](#연동-현황)
 - [설치와 실행](#설치와-실행)
 - [기술 스택](#기술-스택)
@@ -102,6 +103,40 @@ Planner에서 생성한 할 일도 별도 복사본이 아니라 즉시 Task 보
 - 목표 시간·스트레칭 알림
 - 시스템 테마와 라이트·다크 테마
 - macOS Keychain 기반 인증정보 저장
+
+## 기능 화면
+
+아래 이미지는 공개 문서를 위해 만든 가상 데이터 화면입니다. 실제 사용자, 회사, 저장소 또는 업무 정보는 포함하지 않습니다.
+
+### AI 작업 세션 연결
+
+Codex와 Claude의 로컬 작업 세션을 탐색하고 하나의 Orbit Task에 연결합니다. 세션의 최근 활동과 연결된 작업을 함께 확인할 수 있습니다.
+
+![Orbit AI 작업 세션 연결](docs/assets/orbit-ai-sessions.png)
+
+### 단일 작업 집중 모드
+
+진행 중인 Task 하나에 집중을 시작하면 다른 작업과 내비게이션을 잠시 비활성화합니다. 집중 종료, 완료와 컨텍스트 확인 동작만 남겨 불필요한 전환을 줄입니다.
+
+![Orbit 단일 작업 집중 모드](docs/assets/orbit-focus-mode.png)
+
+### Jira 티켓과 개발 근거
+
+내 담당 Jira 티켓을 검색하고 상태별로 확인합니다. 선택한 티켓의 branch, commit과 pull request를 추적하고 Orbit Task에 연결할 수 있습니다.
+
+![Orbit Jira 티켓 연동](docs/assets/orbit-jira-tickets.png)
+
+### 근거 기반 AI Chat
+
+현재 Task, Calendar와 연결된 업무 데이터를 근거로 답변합니다. AI가 새 Task를 제안하더라도 사용자 승인을 받아야 실제 작업으로 생성됩니다.
+
+![Orbit 근거 기반 AI Chat](docs/assets/orbit-ai-chat.png)
+
+### Google Calendar 읽기 전용 연동
+
+Google Calendar 일정을 주간 화면에서 확인하고 오늘의 일정과 집중 시간을 함께 계획합니다. Orbit은 Google 원본 일정을 수정하거나 삭제하지 않습니다.
+
+![Orbit Google Calendar 연동](docs/assets/orbit-calendar.png)
 
 ## 연동 현황
 
