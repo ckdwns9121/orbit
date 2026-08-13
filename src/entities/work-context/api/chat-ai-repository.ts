@@ -1,6 +1,16 @@
-import { Channel, invoke } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
 import type { ChatMessage } from "../model/chat";
-import { taskProposalFromToolCall, type ChatTaskProposal, type CreateTaskToolCall } from "../model/chat-task-proposal";
+import type { ChatAgentApproval, ChatAgentMutationTool, ChatAgentRun, ChatAgentStepView } from "../model/chat-agent";
+import { listAiSessions } from "./ai-session-repository";
+import { addWorkItemToDailyPlan } from "./daily-plan-repository";
+import {
+  createAgentApprovals,
+  createChatAgentRun,
+  getChatAgentRun,
+  listRunAgentApprovals,
+  saveChatAgentRun,
+  updateAgentApproval,
+} from "./chat-agent-repository";
 import { listCalendarEvents } from "./calendar-event-repository";
 import { searchCompletedWork, type CompletedWorkSearchResult } from "./completion-repository";
 import { searchConfluencePagesWithProvenance } from "./confluence-page-repository";
@@ -14,7 +24,7 @@ import { listCachedJiraIssues } from "./jira-issue-repository";
 import { queryCacheWarning, type QueryCacheProvenance } from "./query-cache-provenance";
 import { safeSyncErrorSummary } from "./source-sync-repository";
 import { searchSlackMessagesWithProvenance } from "./slack-message-repository";
-import { listWorkItems } from "./work-item-repository";
+import { createWorkItem, listWorkItems, updateWorkItemPriority, updateWorkItemTargetAt, updateWorkItemTitle } from "./work-item-repository";
 
 export type ContextSourceId = "tasks" | "calendar" | "jira" | "github" | "graph" | "slack" | "confluence";
 export type ContextSourceState = "pending" | "collecting" | "complete" | "unavailable" | "error";
@@ -43,36 +53,33 @@ function contextSource(id: ContextSourceId): ContextSourceStatus {
   return source;
 }
 
-interface ChatStreamEvent {
-  kind: "started" | "delta" | "completed" | "cancelled";
-  delta?: string;
-  responseId?: string;
-}
-
 interface StreamCallbacks {
   signal?: AbortSignal;
   onDelta: (delta: string) => void;
   onSource: (source: ContextSourceStatus) => void;
+  onSteps?: (steps: ChatAgentStepView[]) => void;
 }
 
 export interface StreamAnswer {
   content: string;
   responseId: string | null;
   cancelled: boolean;
-  taskProposals: ChatTaskProposal[];
+  approvals: ChatAgentApproval[];
+  runId: string;
+  steps: ChatAgentStepView[];
 }
 
-interface ChatToolPlan {
+interface ChatAgentStepResponse {
+  responseId: string | null;
+  content: string;
   calls: ChatToolCall[];
 }
 
-interface SearchChatToolCall {
+interface ChatToolCall {
   callId: string;
-  name: "search_slack_messages" | "search_confluence_pages";
+  name: string;
   arguments: unknown;
 }
-
-type ChatToolCall = SearchChatToolCall | CreateTaskToolCall;
 
 interface SearchToolArguments {
   query: string;
@@ -276,8 +283,8 @@ export function buildChatQueryCacheContext(label: string, provenance: QueryCache
   };
 }
 
-async function executeToolCall(
-  call: SearchChatToolCall,
+async function executeSearchToolCall(
+  call: ChatToolCall,
   onSource: (source: ContextSourceStatus) => void,
 ): Promise<{ call: Record<string, unknown>; output: Record<string, unknown> }> {
   const arguments_ = parseSearchToolArguments(call.arguments);
@@ -329,94 +336,177 @@ async function executeToolCall(
   };
 }
 
-function approvalRequiredToolResult(call: CreateTaskToolCall, proposal: ChatTaskProposal | null) {
-  const result = proposal
-    ? { ok: false, status: "approval_required", title: proposal.title, description: proposal.description }
-    : { ok: false, status: "invalid_arguments", error: "A non-empty title is required." };
-  return {
-    call: { type: "function_call", call_id: call.callId, name: call.name, arguments: JSON.stringify(call.arguments) },
-    output: { type: "function_call_output", call_id: call.callId, output: JSON.stringify(result) },
-  };
+const mutationTools = new Set<ChatAgentMutationTool>(["create_task", "update_task", "add_task_to_planner"]);
+const MAX_AGENT_ITERATIONS = 8;
+const MAX_AGENT_TOOL_CALLS = 20;
+
+function callItem(call: ChatToolCall): Record<string, unknown> {
+  return { type: "function_call", call_id: call.callId, name: call.name, arguments: JSON.stringify(call.arguments) };
 }
 
-export async function streamAnswerWithOrbitContext(
-  question: string,
-  messages: ChatMessage[],
-  model: string,
-  callbacks: StreamCallbacks,
-): Promise<StreamAnswer> {
-  const conversation = messages.slice(-12).map((message) => ({ role: message.role, content: message.content }));
-  const planningStatus = (id: "slack" | "confluence") => {
-    const source = contextSource(id);
-    callbacks.onSource({ ...source, state: "collecting", detail: "AI가 검색 조건 분석 중…" });
-  };
-  planningStatus("slack");
-  planningStatus("confluence");
-  const now = new Date();
-  const baseContext = await buildOrbitContext(now, callbacks.onSource);
-  const completionGrounding = await buildCompletedWorkGrounding(question);
-  const graphGrounding = await buildKnowledgeGraphGrounding(question, callbacks.onSource);
-  const context = composeOrbitGrounding(baseContext, completionGrounding, graphGrounding);
-  const plan = await invoke<ChatToolPlan>("plan_chat_tools", {
-    model,
-    question,
-    conversation,
-    context,
-    localDate: new Intl.DateTimeFormat("sv-SE").format(new Date()),
-  });
-  const taskProposals = plan.calls
-    .filter((call): call is CreateTaskToolCall => call.name === "create_task")
-    .map(taskProposalFromToolCall)
-    .filter((proposal): proposal is ChatTaskProposal => proposal !== null);
-  const executed = await Promise.all(plan.calls.map((call) => call.name === "create_task"
-    ? approvalRequiredToolResult(call, taskProposalFromToolCall(call))
-    : executeToolCall(call, callbacks.onSource)));
-  for (const id of ["slack", "confluence"] as const) {
-    if (!plan.calls.some((call) => call.name === (id === "slack" ? "search_slack_messages" : "search_confluence_pages"))) {
-      const source = contextSource(id);
-      callbacks.onSource({ ...source, state: "complete", count: 0, detail: "이번 질문에는 검색 불필요" });
-    }
+function outputItem(callId: string, value: unknown): Record<string, unknown> {
+  return { type: "function_call_output", call_id: callId, output: JSON.stringify(value) };
+}
+
+function toolLabel(name: string): string {
+  return ({
+    list_tasks: "Task 확인", list_calendar_events: "Calendar 확인", list_jira_issues: "Jira 확인",
+    list_pull_requests: "Pull Request 확인", list_ai_sessions: "AI 세션 확인",
+    search_knowledge_graph: "연결 컨텍스트 탐색", search_slack_messages: "Slack 검색",
+    search_confluence_pages: "Confluence 검색", create_task: "Task 생성 승인 대기",
+    update_task: "Task 수정 승인 대기", add_task_to_planner: "Planner 추가 승인 대기",
+  } as Record<string, string>)[name] || name;
+}
+
+function textArgument(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLocaleLowerCase() : "";
+}
+
+async function executeReadTool(call: ChatToolCall, onSource: StreamCallbacks["onSource"]): Promise<Record<string, unknown>> {
+  if (call.name === "search_slack_messages" || call.name === "search_confluence_pages") {
+    return (await executeSearchToolCall(call, onSource)).output;
   }
-  if (callbacks.signal?.aborted) return { content: "", responseId: null, cancelled: true, taskProposals: [] };
-
-  const requestId = crypto.randomUUID();
-  const channel = new Channel<ChatStreamEvent>();
-  let content = "";
-  let responseId: string | null = null;
-  let cancelled = false;
-  channel.onmessage = (event) => {
-    if (event.kind === "delta" && event.delta) {
-      content += event.delta;
-      callbacks.onDelta(event.delta);
-    } else if ((event.kind === "started" || event.kind === "completed") && event.responseId) {
-      responseId = event.responseId;
-    } else if (event.kind === "cancelled") {
-      cancelled = true;
-    }
-  };
-
-  const cancel = () => { void invoke("cancel_chat_stream", { requestId }); };
-  callbacks.signal?.addEventListener("abort", cancel, { once: true });
+  const input = typeof call.arguments === "object" && call.arguments !== null ? call.arguments as Record<string, unknown> : {};
+  const query = textArgument(input.query);
   try {
-    await invoke("stream_chat_with_orbit_context", {
-      request: {
-        requestId,
-        model,
-        question,
-        context,
-        conversation,
-        toolCalls: executed.map((item) => item.call),
-        toolOutputs: executed.map((item) => item.output),
-      },
-      onEvent: channel,
-    });
-    return {
-      content,
-      responseId,
-      cancelled: cancelled || Boolean(callbacks.signal?.aborted),
-      taskProposals: cancelled || callbacks.signal?.aborted ? [] : taskProposals,
-    };
-  } finally {
-    callbacks.signal?.removeEventListener("abort", cancel);
+    if (call.name === "list_tasks") {
+      const status = textArgument(input.status);
+      const tasks = (await listWorkItems()).filter((task) => (!status || task.status === status) && (!query || `${task.title} ${task.goal || ""} ${task.nextAction || ""}`.toLocaleLowerCase().includes(query))).slice(0, 80);
+      return outputItem(call.callId, { ok: true, tasks });
+    }
+    if (call.name === "list_calendar_events") {
+      const from = new Date(`${String(input.date_from)}T00:00:00`);
+      const to = new Date(`${String(input.date_to)}T23:59:59.999`);
+      if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) return outputItem(call.callId, { ok: false, error: "invalid_date_range" });
+      return outputItem(call.callId, { ok: true, events: (await listCalendarEvents(from, to)).slice(0, 100) });
+    }
+    if (call.name === "list_jira_issues") {
+      const issues = (await listCachedJiraIssues()).filter((issue) => !query || `${issue.key} ${issue.summary} ${issue.status}`.toLocaleLowerCase().includes(query)).slice(0, 80);
+      return outputItem(call.callId, { ok: true, issues });
+    }
+    if (call.name === "list_pull_requests") {
+      const relation = textArgument(input.relation);
+      const pullRequests = (await listCachedPullRequests()).filter((pr) => (!relation || (relation === "authored" ? pr.authoredByViewer : pr.reviewRequested)) && (!query || `${pr.repository} ${pr.title}`.toLocaleLowerCase().includes(query))).slice(0, 80);
+      return outputItem(call.callId, { ok: true, pullRequests });
+    }
+    if (call.name === "list_ai_sessions") {
+      const sessions = (await listAiSessions()).filter((session) => !query || `${session.customTitle || session.title} ${session.cwd || ""} ${session.lastPrompt || ""}`.toLocaleLowerCase().includes(query)).slice(0, 60).map((session) => ({ provider: session.provider, sessionId: session.sessionId, title: session.customTitle || session.title, cwd: session.cwd, model: session.model, lastPrompt: session.lastPrompt?.slice(0, 800), updatedAt: session.updatedAt, linkedWorkItemId: session.linkedWorkItemId }));
+      return outputItem(call.callId, { ok: true, sessions });
+    }
+    if (call.name === "search_knowledge_graph") {
+      await ensureContextGraphIndex();
+      const result = await searchContextGraph(String(input.query || ""));
+      return outputItem(call.callId, { ok: true, context: formatContextGraphResults(result) });
+    }
+    return outputItem(call.callId, { ok: false, error: "unsupported_tool" });
+  } catch (cause) {
+    return outputItem(call.callId, { ok: false, error: cause instanceof Error ? cause.message : String(cause) });
   }
+}
+
+async function continueAgent(run: ChatAgentRun, callbacks: StreamCallbacks): Promise<StreamAnswer> {
+  const steps: ChatAgentStepView[] = [];
+  while (run.iteration < MAX_AGENT_ITERATIONS && run.toolCount < MAX_AGENT_TOOL_CALLS) {
+    if (callbacks.signal?.aborted) {
+      run.status = "cancelled";
+      await saveChatAgentRun(run);
+      return { content: "", responseId: run.responseId, cancelled: true, approvals: [], runId: run.id, steps };
+    }
+    steps.push({ id: `thinking-${run.iteration}`, label: run.iteration ? "도구 결과를 바탕으로 다음 행동 판단" : "요청 분석 및 실행 계획 수립", state: "running" });
+    callbacks.onSteps?.([...steps]);
+    const response = await invoke<ChatAgentStepResponse>("run_chat_agent_step", {
+      model: run.model, question: run.question, conversation: run.conversation, context: run.context,
+      localDate: new Intl.DateTimeFormat("sv-SE").format(new Date()), transcript: run.transcript,
+    });
+    steps[steps.length - 1].state = "complete";
+    run.iteration += 1;
+    run.responseId = response.responseId;
+    if (response.calls.length === 0) {
+      const content = response.content.trim() || "확인 가능한 정보를 모두 살펴봤지만 답변을 구성하지 못했습니다.";
+      run.status = "completed";
+      await saveChatAgentRun(run);
+      callbacks.onSteps?.([...steps]);
+      callbacks.onDelta(content);
+      return { content, responseId: run.responseId, cancelled: false, approvals: [], runId: run.id, steps };
+    }
+    if (run.toolCount + response.calls.length > MAX_AGENT_TOOL_CALLS) break;
+    run.toolCount += response.calls.length;
+    run.transcript.push(...response.calls.map(callItem));
+    const mutations = response.calls.filter((call): call is ChatToolCall & { name: ChatAgentMutationTool } => mutationTools.has(call.name as ChatAgentMutationTool));
+    for (const call of response.calls.filter((item) => !mutationTools.has(item.name as ChatAgentMutationTool))) {
+      const step: ChatAgentStepView = { id: call.callId, label: toolLabel(call.name), state: "running" };
+      steps.push(step); callbacks.onSteps?.([...steps]);
+      run.transcript.push(await executeReadTool(call, callbacks.onSource));
+      step.state = "complete"; callbacks.onSteps?.([...steps]);
+    }
+    if (mutations.length) {
+      const approvals = await createAgentApprovals(run.id, mutations);
+      run.status = "awaiting_approval";
+      await saveChatAgentRun(run);
+      steps.push(...approvals.map((approval) => ({ id: approval.id, label: toolLabel(approval.toolName), state: "waiting" as const })));
+      callbacks.onSteps?.([...steps]);
+      return { content: response.content.trim(), responseId: run.responseId, cancelled: false, approvals, runId: run.id, steps };
+    }
+    await saveChatAgentRun(run);
+  }
+  const content = `안전을 위해 에이전트 실행을 ${run.iteration}회 판단·${run.toolCount}개 도구에서 중단했습니다. 요청 범위를 좁혀 다시 시도해주세요.`;
+  run.status = "failed";
+  await saveChatAgentRun(run);
+  callbacks.onDelta(content);
+  return { content, responseId: run.responseId, cancelled: false, approvals: [], runId: run.id, steps };
+}
+
+export async function streamAnswerWithOrbitContext(question: string, messages: ChatMessage[], model: string, threadId: string, callbacks: StreamCallbacks): Promise<StreamAnswer> {
+  const conversation = messages.slice(-12).map((message) => ({ role: message.role, content: message.content }));
+  const now = new Date();
+  const context = composeOrbitGrounding(
+    await buildOrbitContext(now, callbacks.onSource),
+    await buildCompletedWorkGrounding(question),
+    await buildKnowledgeGraphGrounding(question, callbacks.onSource),
+  );
+  const run = await createChatAgentRun({ threadId, question, model, context, conversation });
+  return continueAgent(run, callbacks);
+}
+
+async function executeApprovedMutation(approval: ChatAgentApproval): Promise<Record<string, unknown>> {
+  const input = approval.arguments;
+  if (approval.toolName === "create_task") {
+    const title = String(input.title || "").trim();
+    if (!title) throw new Error("Task 제목이 비어 있습니다.");
+    const id = await createWorkItem({ title, status: "todo", goal: typeof input.description === "string" ? input.description : undefined });
+    return { ok: true, taskId: id, title };
+  }
+  const taskId = String(input.task_id || "");
+  if (!(await listWorkItems()).some((item) => item.id === taskId)) throw new Error("Task를 찾을 수 없습니다.");
+  if (approval.toolName === "update_task") {
+    if (typeof input.title === "string" && input.title.trim()) await updateWorkItemTitle(taskId, input.title);
+    if (input.priority === "p1" || input.priority === "p2" || input.priority === "p3") await updateWorkItemPriority(taskId, input.priority);
+    if (typeof input.target_at === "string") await updateWorkItemTargetAt(taskId, input.target_at);
+    return { ok: true, taskId };
+  }
+  const planDate = String(input.plan_date || "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(planDate)) throw new Error("Planner 날짜가 올바르지 않습니다.");
+  await addWorkItemToDailyPlan(taskId, planDate);
+  return { ok: true, taskId, planDate };
+}
+
+export async function resolveChatAgentApproval(approval: ChatAgentApproval, approved: boolean, callbacks: StreamCallbacks): Promise<StreamAnswer | null> {
+  if (approval.status !== "pending" && approval.status !== "failed") return null;
+  await updateAgentApproval(approval.id, "executing");
+  let result: Record<string, unknown>;
+  try {
+    result = approved ? await executeApprovedMutation(approval) : { ok: false, status: "rejected_by_user" };
+    await updateAgentApproval(approval.id, approved ? "approved" : "rejected", result);
+  } catch (cause) {
+    await updateAgentApproval(approval.id, "failed", null, cause instanceof Error ? cause.message : String(cause));
+    throw cause;
+  }
+  const approvals = await listRunAgentApprovals(approval.runId);
+  if (approvals.some((item) => item.status === "pending" || item.status === "executing" || item.status === "failed")) return null;
+  const run = await getChatAgentRun(approval.runId);
+  if (!run || run.status !== "awaiting_approval") return null;
+  for (const item of approvals) run.transcript.push(outputItem(item.callId, item.result || { ok: false, status: item.status }));
+  run.status = "running";
+  await saveChatAgentRun(run);
+  return continueAgent(run, callbacks);
 }

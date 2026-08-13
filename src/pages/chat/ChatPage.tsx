@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
   initialContextSources,
+  resolveChatAgentApproval,
   streamAnswerWithOrbitContext,
   type ContextSourceStatus,
 } from "../../entities/work-context/api/chat-ai-repository";
 import { appendChatMessage, createChatThread, deleteChatThread, listChatMessages, listChatThreads } from "../../entities/work-context/api/chat-repository";
+import { attachAgentApprovalsToMessage, listThreadAgentApprovals } from "../../entities/work-context/api/chat-agent-repository";
 import {
   chooseOpenAiModel,
   fallbackOpenAiModels,
@@ -12,9 +14,8 @@ import {
   type OpenAiModelOption,
 } from "../../entities/work-context/api/openai-model-repository";
 import { getAppSettings, setAppSettings } from "../../entities/work-context/api/settings-repository";
-import { createWorkItem } from "../../entities/work-context/api/work-item-repository";
 import type { ChatMessage, ChatThread } from "../../entities/work-context/model/chat";
-import type { ChatTaskProposal } from "../../entities/work-context/model/chat-task-proposal";
+import type { ChatAgentApproval, ChatAgentStepView } from "../../entities/work-context/model/chat-agent";
 import VirtualMessageList, { type DisplayMessage } from "./VirtualMessageList";
 import "./ChatPage.scss";
 
@@ -35,6 +36,14 @@ function ContextStatusPanel({ sources, active }: { sources: ContextSourceStatus[
   </section>;
 }
 
+function groupApprovalsByMessage(approvals: ChatAgentApproval[]): Record<string, ChatAgentApproval[]> {
+  return approvals.reduce<Record<string, ChatAgentApproval[]>>((result, approval) => {
+    if (!approval.messageId) return result;
+    (result[approval.messageId] ||= []).push(approval);
+    return result;
+  }, {});
+}
+
 export default function ChatPage() {
   const [threads, setThreads] = useState<ChatThread[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -49,7 +58,8 @@ export default function ChatPage() {
   const [selectedModelId, setSelectedModelId] = useState("");
   const [isModelPickerOpen, setIsModelPickerOpen] = useState(false);
   const [modelNotice, setModelNotice] = useState<string | null>(null);
-  const [taskProposalsByMessage, setTaskProposalsByMessage] = useState<Record<string, ChatTaskProposal[]>>({});
+  const [approvalsByMessage, setApprovalsByMessage] = useState<Record<string, ChatAgentApproval[]>>({});
+  const [agentSteps, setAgentSteps] = useState<ChatAgentStepView[]>([]);
   const abortRef = useRef<AbortController | null>(null);
   const streamBufferRef = useRef("");
   const streamFrameRef = useRef<number | null>(null);
@@ -82,7 +92,10 @@ export default function ChatPage() {
   }, []);
   useEffect(() => {
     if (!activeId) { setMessages([]); return; }
-    void listChatMessages(activeId).then(setMessages).catch((cause) => setError(String(cause)));
+    void Promise.all([listChatMessages(activeId), listThreadAgentApprovals(activeId)]).then(([nextMessages, approvals]) => {
+      setMessages(nextMessages);
+      setApprovalsByMessage(groupApprovalsByMessage(approvals));
+    }).catch((cause) => setError(String(cause)));
   }, [activeId]);
   useEffect(() => () => {
     abortRef.current?.abort();
@@ -108,49 +121,76 @@ export default function ChatPage() {
       id,
       role,
       content,
-      taskProposals: taskProposalsByMessage[id],
+      approvals: approvalsByMessage[id],
     }));
     if (isAnswering) result.push({ id: "streaming-assistant", role: "assistant", content: streamingContent, streaming: true });
     return result;
-  }, [messages, isAnswering, streamingContent, taskProposalsByMessage]);
+  }, [messages, isAnswering, streamingContent, approvalsByMessage]);
 
-  const updateTaskProposal = useCallback((proposalId: string, update: (proposal: ChatTaskProposal) => ChatTaskProposal) => {
-    setTaskProposalsByMessage((current) => Object.fromEntries(Object.entries(current).map(([messageId, proposals]) => [
+  const updateTaskProposal = useCallback((proposalId: string, update: (proposal: ChatAgentApproval) => ChatAgentApproval) => {
+    setApprovalsByMessage((current) => Object.fromEntries(Object.entries(current).map(([messageId, proposals]) => [
       messageId,
       proposals.map((proposal) => proposal.id === proposalId ? update(proposal) : proposal),
     ])));
   }, []);
 
+  const persistAgentContinuation = useCallback(async (threadId: string, answer: Awaited<ReturnType<typeof resolveChatAgentApproval>>) => {
+    if (!answer) return;
+    const content = answer.content.trim() || (answer.approvals.length ? "다음 변경 작업을 진행하려면 아래 승인 요청을 확인해주세요." : "");
+    if (content) {
+      const messageId = await appendChatMessage(threadId, "assistant", content, answer.responseId);
+      if (answer.approvals.length) await attachAgentApprovalsToMessage(answer.runId, messageId);
+    }
+    const [nextMessages, approvals] = await Promise.all([listChatMessages(threadId), listThreadAgentApprovals(threadId)]);
+    setMessages(nextMessages);
+    setApprovalsByMessage(groupApprovalsByMessage(approvals));
+  }, []);
+
   const approveTask = useCallback(async (proposalId: string) => {
     if (approvingTaskIdsRef.current.has(proposalId)) return;
-    const proposal = Object.values(taskProposalsByMessage).flat().find((item) => item.id === proposalId);
-    if (!proposal || (proposal.status !== "pending" && proposal.status !== "error")) return;
+    const proposal = Object.values(approvalsByMessage).flat().find((item) => item.id === proposalId);
+    if (!proposal || (proposal.status !== "pending" && proposal.status !== "failed")) return;
     approvingTaskIdsRef.current.add(proposalId);
-    updateTaskProposal(proposalId, (item) => ({ ...item, status: "approving", error: undefined }));
+    updateTaskProposal(proposalId, (item) => ({ ...item, status: "executing", error: null }));
     try {
-      const workItemId = await createWorkItem({
-        title: proposal.title,
-        status: "todo",
-        goal: proposal.description || undefined,
-      });
-      updateTaskProposal(proposalId, (item) => ({ ...item, status: "created", workItemId, error: undefined }));
+      setIsAnswering(true); setAgentSteps([]);
+      const answer = await resolveChatAgentApproval(proposal, true, { onDelta: enqueueDelta, onSource: updateSource, onSteps: setAgentSteps });
+      updateTaskProposal(proposalId, (item) => ({ ...item, status: "approved", error: null }));
+      if (activeId) await persistAgentContinuation(activeId, answer);
     } catch (cause) {
       updateTaskProposal(proposalId, (item) => ({
         ...item,
-        status: "error",
+        status: "failed",
         error: cause instanceof Error ? cause.message : String(cause),
       }));
     } finally {
       approvingTaskIdsRef.current.delete(proposalId);
+      setIsAnswering(false); setStreamingContent(""); streamBufferRef.current = "";
     }
-  }, [taskProposalsByMessage, updateTaskProposal]);
+  }, [activeId, approvalsByMessage, persistAgentContinuation, updateSource, updateTaskProposal]);
 
   const rejectTask = useCallback((proposalId: string) => {
     if (approvingTaskIdsRef.current.has(proposalId)) return;
-    updateTaskProposal(proposalId, (item) => item.status === "pending" || item.status === "error"
-      ? { ...item, status: "rejected", error: undefined }
+    const proposal = Object.values(approvalsByMessage).flat().find((item) => item.id === proposalId);
+    if (!proposal) return;
+    approvingTaskIdsRef.current.add(proposalId);
+    setIsAnswering(true);
+    setAgentSteps([]);
+    updateTaskProposal(proposalId, (item) => item.status === "pending" || item.status === "failed"
+      ? { ...item, status: "executing", error: null }
       : item);
-  }, [updateTaskProposal]);
+    void resolveChatAgentApproval(proposal, false, { onDelta: enqueueDelta, onSource: updateSource, onSteps: setAgentSteps })
+      .then(async (answer) => {
+        updateTaskProposal(proposalId, (item) => ({ ...item, status: "rejected", error: null }));
+        if (activeId) await persistAgentContinuation(activeId, answer);
+      }).catch((cause) => updateTaskProposal(proposalId, (item) => ({ ...item, status: "failed", error: String(cause) })))
+      .finally(() => {
+        approvingTaskIdsRef.current.delete(proposalId);
+        setIsAnswering(false);
+        setStreamingContent("");
+        streamBufferRef.current = "";
+      });
+  }, [activeId, approvalsByMessage, persistAgentContinuation, updateSource, updateTaskProposal]);
 
   async function refreshThreads(selectId?: string) {
     const next = await listChatThreads();
@@ -190,28 +230,28 @@ export default function ChatPage() {
       await appendChatMessage(threadId, "user", text);
       const withUser = await listChatMessages(threadId);
       setMessages(withUser);
-      const answer = await streamAnswerWithOrbitContext(text, withUser.slice(0, -1), selectedModel.id, {
+      setAgentSteps([]);
+      const answer = await streamAnswerWithOrbitContext(text, withUser.slice(0, -1), selectedModel.id, threadId, {
         signal: controller.signal,
         onDelta: enqueueDelta,
         onSource: updateSource,
+        onSteps: setAgentSteps,
       });
       if (streamFrameRef.current !== null) cancelAnimationFrame(streamFrameRef.current);
       streamFrameRef.current = null;
       const assistantContent = answer.content.trim()
         ? answer.content
-        : answer.taskProposals.length > 0
-          ? "실행 가능한 할 일을 제안했습니다. 아래 카드에서 생성 여부를 선택해주세요."
+        : answer.approvals.length > 0
+          ? "변경 작업을 진행하려면 아래 승인 요청을 확인해주세요."
           : "";
       setStreamingContent(assistantContent);
       if (assistantContent) {
-        await appendChatMessage(threadId, "assistant", assistantContent, answer.responseId ?? undefined);
+        const assistantMessageId = await appendChatMessage(threadId, "assistant", assistantContent, answer.responseId ?? undefined);
+        if (answer.approvals.length) await attachAgentApprovalsToMessage(answer.runId, assistantMessageId);
       }
       const nextMessages = await listChatMessages(threadId);
       setMessages(nextMessages);
-      const assistantMessage = [...nextMessages].reverse().find((message) => message.role === "assistant");
-      if (assistantMessage && answer.taskProposals.length > 0) {
-        setTaskProposalsByMessage((current) => ({ ...current, [assistantMessage.id]: answer.taskProposals }));
-      }
+      if (answer.approvals.length && nextMessages.length) setApprovalsByMessage((current) => ({ ...current, [nextMessages[nextMessages.length - 1].id]: answer.approvals }));
       await refreshThreads(threadId);
     } catch (cause) {
       if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : String(cause));
@@ -244,6 +284,7 @@ export default function ChatPage() {
     </aside>
     <section className="chat-conversation">
       <ContextStatusPanel sources={contextSources} active={contextStarted} />
+      {agentSteps.length > 0 && <section className="chat-agent-steps" aria-live="polite"><strong>에이전트 실행</strong>{agentSteps.map((step) => <span className={step.state} key={step.id}>{step.state === "complete" ? "✓" : step.state === "waiting" ? "…" : "·"} {step.label}</span>)}</section>}
       {displayMessages.length === 0
         ? <div className="chat-empty"><span>✦</span><h2>Orbit에게 물어보세요</h2><p>Task, Calendar, Jira, GitHub, Slack, Confluence를 연결한 Knowledge Graph로 답합니다.</p><div><button onClick={() => setQuestion("오늘 일정과 우선순위를 정리해줘")}>오늘 일정과 우선순위</button><button onClick={() => setQuestion("2024년 온콜 관련 문서와 대화를 찾아줘")}>문서·대화 검색</button></div></div>
         : <VirtualMessageList messages={displayMessages} onApproveTask={approveTask} onRejectTask={rejectTask} />}
@@ -286,7 +327,7 @@ export default function ChatPage() {
         {isAnswering
           ? <button className="chat-cancel-button" type="button" onClick={() => abortRef.current?.abort()}><span /> 중단</button>
           : <button className="primary-button" disabled={!question.trim() || !selectedModelId}>↑</button>}
-        <small>{isAnswering ? "답변을 실시간으로 생성하고 있습니다." : "연결된 업무 컨텍스트가 OpenAI로 전송됩니다. 답변은 캐시된 데이터 기준입니다."}</small>
+        <small>{isAnswering ? "에이전트가 필요한 도구를 실행하고 결과를 확인하고 있습니다." : "연결된 업무 컨텍스트가 OpenAI로 전송됩니다. 답변은 캐시된 데이터 기준입니다."}</small>
       </form>
     </section>
   </div>;

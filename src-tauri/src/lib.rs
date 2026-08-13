@@ -372,6 +372,12 @@ pub fn run() {
             sql: include_str!("../migrations/0031_daily_priorities.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 32,
+            description: "durable_chat_agent_runs",
+            sql: include_str!("../migrations/0032_chat_agent_runs.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()
@@ -450,6 +456,7 @@ pub fn run() {
             openai_chat::list_openai_chat_models,
             openai_chat::stream_chat_with_orbit_context,
             openai_chat::plan_chat_tools,
+            openai_chat::run_chat_agent_step,
             openai_chat::cancel_chat_stream,
             task_prioritization::prioritize_work_items
         ])

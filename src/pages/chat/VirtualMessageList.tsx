@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ChatRole } from "../../entities/work-context/model/chat";
-import type { ChatTaskProposal } from "../../entities/work-context/model/chat-task-proposal";
+import type { ChatAgentApproval } from "../../entities/work-context/model/chat-agent";
 import ChatMarkdown from "./ChatMarkdown";
 import TaskApprovalCard from "./TaskApprovalCard";
 import { calculateVirtualRange } from "./virtual-range";
@@ -10,12 +10,12 @@ export interface DisplayMessage {
   role: ChatRole;
   content: string;
   streaming?: boolean;
-  taskProposals?: ChatTaskProposal[];
+  approvals?: ChatAgentApproval[];
 }
 
 function estimatedHeight(message: DisplayMessage) {
   if (message.role === "user") return 74;
-  const proposalHeight = (message.taskProposals?.length ?? 0) * 150;
+  const proposalHeight = (message.approvals?.length ?? 0) * 150;
   return Math.min(1_200, 78 + Math.ceil(message.content.length / 72) * 23 + proposalHeight);
 }
 
@@ -41,7 +41,7 @@ function MeasuredMessage({ message, top, onHeight, onApproveTask, onRejectTask }
       <span>{message.role === "user" ? "나" : "✦"}</span>
       <div className="chat-message-content">
         <ChatMarkdown content={message.content || "답변을 준비하고 있습니다…"} />
-        {message.taskProposals?.map((proposal) => <TaskApprovalCard
+        {message.approvals?.map((proposal) => <TaskApprovalCard
           key={proposal.id}
           proposal={proposal}
           onApprove={onApproveTask}

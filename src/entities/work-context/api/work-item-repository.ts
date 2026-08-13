@@ -187,6 +187,14 @@ export async function updateWorkItemTargetAt(id: string, targetAt: string | null
   );
 }
 
+export async function updateWorkItemPriority(id: string, priority: WorkItemPriority | null): Promise<void> {
+  const database = await getDatabase();
+  await database.execute(
+    "UPDATE work_items SET priority = $1, updated_at = $2 WHERE id = $3",
+    [priority, new Date().toISOString(), id],
+  );
+}
+
 export async function applyTaskAiFixes(suggestions: TaskAiFixSuggestion[]): Promise<void> {
   if (suggestions.length === 0) return;
   const database = await getDatabase();

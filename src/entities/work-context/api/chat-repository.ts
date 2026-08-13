@@ -27,14 +27,16 @@ export async function listChatMessages(threadId: string): Promise<ChatMessage[]>
   return rows.map((row) => ({ id: row.id, threadId: row.thread_id, role: row.role, content: row.content, responseId: row.response_id, createdAt: row.created_at }));
 }
 
-export async function appendChatMessage(threadId: string, role: ChatRole, content: string, responseId: string | null = null): Promise<void> {
+export async function appendChatMessage(threadId: string, role: ChatRole, content: string, responseId: string | null = null): Promise<string> {
   const database = await getDatabase();
   const now = new Date().toISOString();
+  const id = crypto.randomUUID();
   await database.execute(
     "INSERT INTO chat_messages (id, thread_id, role, content, response_id, created_at) VALUES ($1, $2, $3, $4, $5, $6)",
-    [crypto.randomUUID(), threadId, role, content.trim(), responseId, now],
+    [id, threadId, role, content.trim(), responseId, now],
   );
   await database.execute("UPDATE chat_threads SET updated_at = $1 WHERE id = $2", [now, threadId]);
+  return id;
 }
 
 export async function deleteChatThread(threadId: string): Promise<void> {
