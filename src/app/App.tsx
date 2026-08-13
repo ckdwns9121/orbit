@@ -30,6 +30,7 @@ import {
 } from "../entities/work-context/api/ai-session-repository";
 import {
   createWorkItemLink,
+  createSlackMessageLink,
   deleteWorkItemLink,
   extractJiraKey,
   listWorkItemLinks,
@@ -57,6 +58,7 @@ import {
   type JiraIssueDevelopment,
 } from "../entities/work-context/model/jira-development";
 import type { WorkItemLink } from "../entities/work-context/model/work-item-link";
+import type { DailyBriefing, DailyBriefingCandidate } from "../entities/work-context/model/daily-briefing";
 import type { JiraIssue, JiraTaskLink } from "../entities/work-context/model/jira-issue";
 import { taskStatusSuggestionForSessions } from "../entities/work-context/model/task-flow";
 import { isTaskSortMode, type TaskSortMode } from "../entities/work-context/model/work-item-sort";
@@ -68,6 +70,7 @@ import JiraTicketsPage from "../pages/jira-tickets";
 import TaskContextDiscoveryModal from "../features/tasks/task-context-discovery";
 import ChatPage from "../pages/chat";
 import DashboardPage from "../pages/dashboard";
+import DailyBriefingPanel from "../features/daily-briefing";
 import GraphPage from "../pages/graph";
 import { SearchCombobox, ServiceIcon, serviceIconForProvider, type SearchComboboxOption } from "../shared/ui";
 import QuickPanel from "../features/navigation/quick-panel";
@@ -95,6 +98,7 @@ import { dailyPlanDateForTargetAt } from "../entities/work-context/model/daily-p
 import { listSourceSyncStates } from "../entities/work-context/api/source-sync-repository";
 import type { SourceSyncState } from "../entities/work-context/model/work-continuity";
 import { saveSlackMessageToInbox } from "../entities/work-context/api/inbox-repository";
+import { collectDailyBriefing } from "../entities/work-context/api/daily-briefing-repository";
 import { prepareEnabledCheckpointDraft, recordAutomationApproval } from "../entities/work-context/api/automation-repository";
 import { recoverDurableJiraOutbox } from "../features/sources/jira-outbox-recovery";
 import AppSidebar from "./ui/AppSidebar";
@@ -128,6 +132,10 @@ function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isComposerOpen, setIsComposerOpen] = useState(false);
+  const [isDailyBriefingOpen, setIsDailyBriefingOpen] = useState(false);
+  const [isDailyBriefingCollecting, setIsDailyBriefingCollecting] = useState(false);
+  const [dailyBriefing, setDailyBriefing] = useState<DailyBriefing | null>(null);
+  const [dailyBriefingError, setDailyBriefingError] = useState<string | null>(null);
   const [discoveryTask, setDiscoveryTask] = useState<{ id: string; title: string; description: string } | null>(null);
   const [pendingTransition, setPendingTransition] = useState<{ targetId: string; targetStatus: WorkItemStatus; openContextAfter?: boolean; suggestionId?: string } | null>(null);
   const [pendingCompletion, setPendingCompletion] = useState<WorkItem | null>(null);
@@ -410,6 +418,39 @@ function App() {
     }
   }
 
+  async function refreshDailyBriefing() {
+    setIsDailyBriefingCollecting(true);
+    setDailyBriefingError(null);
+    try {
+      setDailyBriefing(await collectDailyBriefing());
+    } catch (cause) {
+      setDailyBriefingError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setIsDailyBriefingCollecting(false);
+    }
+  }
+
+  async function approveDailyBriefing(candidates: DailyBriefingCandidate[]) {
+    const today = dailyPlanDateForTargetAt(new Date().toISOString())!;
+    for (const candidate of candidates) {
+      const id = await createWorkItem({ title: candidate.title, goal: candidate.description, status: "todo", priority: candidate.priority, targetAt: candidate.targetAt });
+      await addWorkItemToDailyPlan(id, today);
+      for (const evidence of candidate.evidence) {
+        if (evidence.source === "jira" && evidence.externalId) await createWorkItemLink(id, "jira", evidence.externalId);
+        if (evidence.source === "github_pr" && evidence.url) await createWorkItemLink(id, "github_pr", evidence.url);
+        if (evidence.source === "slack" && evidence.externalId && evidence.url) {
+          await createSlackMessageLink(id, { id: evidence.externalId, permalink: evidence.url, channelName: evidence.label.replace(/^#/, ""), userName: "Slack", text: evidence.detail });
+        }
+        if (evidence.source === "ai_session" && evidence.externalId) {
+          const [provider, ...sessionParts] = evidence.externalId.split(":");
+          if ((provider === "claude" || provider === "codex") && sessionParts.length) await linkAiSession(provider, sessionParts.join(":"), id);
+        }
+      }
+    }
+    await refresh();
+    setDailyBriefing(null);
+  }
+
   return (
     <div className={`app-shell ${isSidebarCollapsed ? "sidebar-collapsed" : ""} ${focusItem ? "has-focus-lock" : ""}`}>
       {shortcutError && (
@@ -446,6 +487,10 @@ function App() {
             onComplete={(item) => { void handleMove(item.id, "done"); }}
             onOpenContext={setContextItem}
             onChanged={refresh}
+            onOpenDailyBriefing={() => {
+              setIsDailyBriefingOpen(true);
+              if (!dailyBriefing) void refreshDailyBriefing();
+            }}
           />
         ) : activeSection === "calendar" ? (
           <CalendarPage />
@@ -516,6 +561,16 @@ function App() {
             if (task.collectAiContext) setDiscoveryTask(task);
             await refresh();
           }}
+        />
+      )}
+      {isDailyBriefingOpen && (
+        <DailyBriefingPanel
+          briefing={dailyBriefing}
+          isCollecting={isDailyBriefingCollecting}
+          error={dailyBriefingError}
+          onCollect={refreshDailyBriefing}
+          onApprove={approveDailyBriefing}
+          onClose={() => setIsDailyBriefingOpen(false)}
         />
       )}
       {discoveryTask && (

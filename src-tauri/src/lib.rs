@@ -435,6 +435,7 @@ pub fn run() {
             local_ai_sessions::scan_local_ai_sessions,
             context_discovery::rank_task_context,
             github_pull_requests::scan_session_pull_requests,
+            github_pull_requests::scan_session_git_work,
             jira_issue::fetch_jira_issue_development,
             jira_issue::fetch_assigned_jira_issues,
             jira_transition::preview_jira_status_transition,

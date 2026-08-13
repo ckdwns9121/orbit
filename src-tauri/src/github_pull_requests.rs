@@ -37,6 +37,25 @@ pub struct PullRequestScanResult {
     warnings: Vec<String>,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalGitWork {
+    repository: String,
+    repo_path: String,
+    branch: String,
+    changed_file_count: usize,
+    ahead_count: usize,
+    recent_commits: Vec<LocalGitCommit>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalGitCommit {
+    sha: String,
+    message: String,
+    committed_at: String,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct GhPullRequest {
@@ -88,6 +107,146 @@ pub async fn scan_session_pull_requests(
     tauri::async_runtime::spawn_blocking(move || scan(cwds))
         .await
         .map_err(|_| "Pull Request 검색 작업이 중단되었습니다.".to_string())?
+}
+
+#[tauri::command]
+pub async fn scan_session_git_work(cwds: Vec<String>) -> Result<Vec<LocalGitWork>, String> {
+    tauri::async_runtime::spawn_blocking(move || scan_local_git_work(cwds))
+        .await
+        .map_err(|_| "로컬 Git 작업 검색이 중단되었습니다.".to_string())?
+}
+
+fn scan_local_git_work(cwds: Vec<String>) -> Result<Vec<LocalGitWork>, String> {
+    let home = env::var_os("HOME")
+        .map(PathBuf::from)
+        .and_then(|path| path.canonicalize().ok())
+        .ok_or_else(|| "사용자 홈 디렉터리를 확인할 수 없습니다.".to_string())?;
+    let git = find_executable(
+        "git",
+        &[
+            "/usr/bin/git",
+            "/opt/homebrew/bin/git",
+            "/usr/local/bin/git",
+        ],
+    )
+    .ok_or_else(|| "Git 실행 파일을 찾을 수 없습니다.".to_string())?;
+    let mut roots = HashSet::new();
+    let mut work = Vec::new();
+
+    for cwd in cwds.into_iter().take(MAX_SESSION_DIRECTORIES) {
+        let Ok(directory) = PathBuf::from(cwd).canonicalize() else {
+            continue;
+        };
+        if !directory.is_dir() || !directory.starts_with(&home) {
+            continue;
+        }
+        let Some(root_text) = command_text(
+            &git,
+            &["-C", path_text(&directory), "rev-parse", "--show-toplevel"],
+        ) else {
+            continue;
+        };
+        let Ok(root) = PathBuf::from(root_text).canonicalize() else {
+            continue;
+        };
+        if !root.starts_with(&home) || !roots.insert(root.clone()) {
+            continue;
+        }
+        let remote = command_text(
+            &git,
+            &["-C", path_text(&root), "remote", "get-url", "origin"],
+        );
+        let repository = remote
+            .as_deref()
+            .and_then(github_repository_slug)
+            .unwrap_or_else(|| {
+                root.file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned()
+            });
+        let branch = command_text(&git, &["-C", path_text(&root), "branch", "--show-current"])
+            .unwrap_or_default();
+        let changed_file_count =
+            command_text(&git, &["-C", path_text(&root), "status", "--porcelain"])
+                .map(|value| value.lines().count())
+                .unwrap_or(0);
+        let range = if command_text(
+            &git,
+            &[
+                "-C",
+                path_text(&root),
+                "rev-parse",
+                "--abbrev-ref",
+                "@{upstream}",
+            ],
+        )
+        .is_some()
+        {
+            "@{upstream}..HEAD".to_string()
+        } else if command_text(
+            &git,
+            &[
+                "-C",
+                path_text(&root),
+                "rev-parse",
+                "--verify",
+                "origin/main",
+            ],
+        )
+        .is_some()
+        {
+            "origin/main..HEAD".to_string()
+        } else {
+            "origin/master..HEAD".to_string()
+        };
+        let ahead_count = command_text(
+            &git,
+            &["-C", path_text(&root), "rev-list", "--count", &range],
+        )
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0);
+        let recent_commits = command_text(
+            &git,
+            &[
+                "-C",
+                path_text(&root),
+                "log",
+                &range,
+                "-10",
+                "--pretty=format:%h%x09%s%x09%cI",
+            ],
+        )
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.splitn(3, '\t');
+            Some(LocalGitCommit {
+                sha: fields.next()?.to_string(),
+                message: fields.next()?.to_string(),
+                committed_at: fields.next()?.to_string(),
+            })
+        })
+        .collect();
+        if changed_file_count > 0 || ahead_count > 0 {
+            work.push(LocalGitWork {
+                repository,
+                repo_path: root.to_string_lossy().into_owned(),
+                branch,
+                changed_file_count,
+                ahead_count,
+                recent_commits,
+            });
+        }
+    }
+    work.sort_by(|left, right| {
+        right
+            .ahead_count
+            .cmp(&left.ahead_count)
+            .then_with(|| right.changed_file_count.cmp(&left.changed_file_count))
+    });
+    work.truncate(MAX_REPOSITORIES);
+    Ok(work)
 }
 
 fn scan(cwds: Vec<String>) -> Result<PullRequestScanResult, String> {

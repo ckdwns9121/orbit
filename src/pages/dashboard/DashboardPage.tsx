@@ -3,6 +3,7 @@ import {
   AlarmClock,
   ArrowDown,
   ArrowUp,
+  Bot,
   CalendarDays,
   Check,
   ChevronLeft,
@@ -64,12 +65,14 @@ export default function DashboardPage({
   onComplete,
   onOpenContext,
   onChanged,
+  onOpenDailyBriefing,
 }: {
   workItems: WorkItem[];
   onResume: (item: WorkItem) => void;
   onComplete: (item: WorkItem) => void;
   onOpenContext: (item: WorkItem) => void;
   onChanged: () => Promise<void>;
+  onOpenDailyBriefing: () => void;
 }) {
   const [month, setMonth] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1));
   const [selectedDate, setSelectedDate] = useState(() => new Date());
@@ -269,6 +272,7 @@ export default function DashboardPage({
           <p>업무와 생활을 계획하고 필요한 순간에만 Jira·Slack·AI 컨텍스트를 여세요.</p>
         </div>
         <div className="planner-heading-actions">
+          <button className="planner-briefing-button" type="button" onClick={onOpenDailyBriefing}><Bot size={15} />오늘 브리핑</button>
           <button type="button" onClick={selectToday}>오늘</button>
           <div className="planner-manager-anchor">
             <button type="button" aria-label="플래너 관리 메뉴" aria-expanded={isManagerMenuOpen} onClick={() => setIsManagerMenuOpen((value) => !value)}><MoreHorizontal size={19} /></button>
