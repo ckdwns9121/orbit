@@ -7,7 +7,7 @@
 .search-combobox-control > button { display: grid; width: 30px; min-height: 30px; padding: 0; place-items: center; color: var(--text-muted); border: 0; background: transparent; }
 .search-combobox.is-open .search-combobox-control > button svg { transform: rotate(180deg); }
 .search-combobox.is-disabled { opacity: .65; }
-.search-combobox-popover { position: absolute; top: calc(100% + 6px); right: 0; left: 0; z-index: 12; overflow: hidden; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); box-shadow: 0 16px 38px rgba(24, 23, 22, .2); }
+.search-combobox-popover { position: absolute; top: calc(100% + 6px); right: 0; left: 0; z-index: 12; overflow: hidden; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); box-shadow: 0 16px 38px rgba(24, 23, 22, .2); }
 .search-combobox-caption { display: flex; min-height: 34px; padding: 0 10px; align-items: center; justify-content: space-between; gap: 12px; color: var(--text-muted); border-bottom: 1px solid var(--border); background: var(--subtle); font-size: 8px; }
 .search-combobox-caption span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .search-combobox-caption b { flex: 0 0 auto; font-size: 8px; }

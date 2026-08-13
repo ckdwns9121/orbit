@@ -1,7 +1,7 @@
 @use "../../../../shared/styles/tokens" as *;
 
 .quick-panel-backdrop { position: fixed; z-index: 120; inset: 0; display: grid; place-items: start center; padding-top: 11vh; background: rgba(24, 22, 20, .3); backdrop-filter: blur(2px); }
-.quick-panel { width: min(620px, calc(100vw - 48px)); max-height: min(650px, 76vh); display: flex; flex-direction: column; overflow: hidden; background: var(--surface); border: 1px solid var(--border-strong); border-radius: 14px; box-shadow: 0 24px 70px rgba(20, 18, 16, .24); }
+.quick-panel { width: min(620px, calc(100vw - 48px)); max-height: min(650px, 76vh); display: flex; flex-direction: column; overflow: hidden; background: var(--surface); border: 1px solid var(--border-strong); border-radius: 6px; box-shadow: 0 24px 70px rgba(20, 18, 16, .24); }
 .quick-panel > header { display: flex; justify-content: space-between; align-items: flex-start; padding: 22px 24px 17px; border-bottom: 1px solid var(--border); }
 .quick-panel > header span { color: var(--accent); font-size: 9px; font-weight: 800; letter-spacing: .12em; }
 .quick-panel > header h2 { margin: 5px 0 0; font-size: 20px; letter-spacing: -.5px; }

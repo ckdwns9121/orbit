@@ -30,7 +30,7 @@
 .theme-options em { min-width: 37px; color: var(--accent); font-size: 8px; font-style: normal; text-align: right; }
 .stretch-reminder-card { margin-top: 14px; }
 .stretch-reminder-heading { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; align-items: center; gap: 11px; }
-.stretch-reminder-heading > span { display: grid; place-items: center; width: 34px; height: 34px; color: var(--accent); background: var(--accent-soft); border-radius: 9px; }
+.stretch-reminder-heading > span { display: grid; place-items: center; width: 34px; height: 34px; color: var(--accent); background: var(--accent-soft); border-radius: 5px; }
 .stretch-reminder-heading > div { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
 .stretch-reminder-heading strong { font-size: 12px; }
 .stretch-reminder-heading small { color: var(--text-muted); font-size: 10px; line-height: 1.45; }
@@ -72,7 +72,7 @@
 .danger-button { color: var(--danger); background: transparent; border-color: var(--danger-border); }
 .google-actions .primary-button { min-width: 116px; }
 .ai-provider-tabs { display: flex; gap: 6px; margin: 18px 0 16px; }
-.ai-provider-tabs button { padding: 7px 15px; height: auto; color: var(--text-muted); background: var(--subtle); border: 1px solid var(--border); border-radius: 999px; font-size: 11px; font-weight: 650; }
+.ai-provider-tabs button { padding: 7px 15px; height: auto; color: var(--text-muted); background: var(--subtle); border: 1px solid var(--border); border-radius: 5px; font-size: 11px; font-weight: 650; }
 .ai-provider-tabs button.active { color: var(--accent); background: var(--accent-soft); border-color: var(--accent); }
 
 .shortcut-settings-card { padding: 0; overflow: hidden; }
