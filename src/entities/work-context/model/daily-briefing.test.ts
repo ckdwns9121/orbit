@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { briefingSummary, mergeBriefingEvidence, type DailyBriefingItem } from "./daily-briefing";
+import { briefingSummary, dailyBriefingToMarkdown, mergeBriefingEvidence, type DailyBriefingItem } from "./daily-briefing";
 
 const item = (id: string, title: string): DailyBriefingItem => ({ id, title, detail: "", source: "task", evidence: [] });
 
@@ -15,5 +15,19 @@ describe("daily briefing report", () => {
       { source: "jira", label: "A", detail: "first", url: "https://jira/A" },
       { source: "jira", label: "A duplicate", detail: "second", url: "https://jira/A" },
     ])).toHaveLength(1);
+  });
+
+  test("creates a copyable Markdown report with reference links", () => {
+    const markdown = dailyBriefingToMarkdown({
+      generatedAt: "2026-08-13T01:00:00.000Z",
+      yesterday: { summary: "어제 작업했습니다.", items: [item("1", "로그인 수정")] },
+      today: { summary: "오늘 배포합니다.", items: [] },
+      attention: { summary: "리뷰가 필요합니다.", items: [] },
+      references: [{ source: "jira", label: "CGKR-1", detail: "로그인 티켓", url: "https://jira/CGKR-1" }],
+      sources: [], notices: [],
+    });
+    expect(markdown).toContain("# 오늘의 업무 브리핑");
+    expect(markdown).toContain("## 어제 한 일");
+    expect(markdown).toContain("[CGKR-1](https://jira/CGKR-1)");
   });
 });

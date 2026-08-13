@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { displaySessionPrompt, displaySessionTitle, projectName, sessionActivity } from "../model/ai-session";
 import {
   briefingSummary,
+  dailyBriefingToMarkdown,
   mergeBriefingEvidence,
   type DailyBriefing,
   type DailyBriefingEvidence,
@@ -116,8 +117,11 @@ export async function collectDailyBriefing(now = new Date()): Promise<DailyBrief
     }
   }
   for (const session of sessions.filter((item) => isWithin(item.updatedAt || new Date(item.modifiedAtMs).toISOString(), yesterdayStart, todayStart)).slice(0, 8)) {
-    yesterday.push(reportItem(`session-yesterday:${session.provider}:${session.sessionId}`, displaySessionTitle(session),
-      `${session.provider} · ${projectName(session.cwd)} · ${displaySessionPrompt(session.lastPrompt) || "AI 작업 기록"}`, "ai_session", session.updatedAt || new Date(session.modifiedAtMs).toISOString()));
+    const prompt = cleanSessionText(displaySessionPrompt(session.lastPrompt));
+    const title = cleanSessionText(displaySessionTitle(session));
+    if (!title && !prompt) continue;
+    yesterday.push(reportItem(`session-yesterday:${session.provider}:${session.sessionId}`, title || `${projectName(session.cwd)} AI 작업`,
+      `${session.provider} · ${projectName(session.cwd)}${prompt ? ` · ${prompt}` : ""}`, "ai_session", session.updatedAt || new Date(session.modifiedAtMs).toISOString()));
   }
 
   const today: DailyBriefingItem[] = [];
@@ -163,7 +167,9 @@ export async function collectDailyBriefing(now = new Date()): Promise<DailyBrief
       [{ source: "jira", label: issue.key, detail: issue.summary, url: issue.url }]));
   }
   for (const session of sessions.filter((item) => !item.linkedWorkItemId && sessionActivity(item, now.getTime()).needsAttention).slice(0, 6)) {
-    attention.push(reportItem(`session:${session.provider}:${session.sessionId}`, displaySessionTitle(session),
+    const title = cleanSessionText(displaySessionTitle(session));
+    if (!title) continue;
+    attention.push(reportItem(`session:${session.provider}:${session.sessionId}`, title,
       `${session.provider} · ${projectName(session.cwd)} · Task에 연결되지 않은 최근 세션`, "ai_session", session.updatedAt));
   }
 
@@ -178,7 +184,7 @@ export async function collectDailyBriefing(now = new Date()): Promise<DailyBrief
     ["github_pr", pullRequests.pullRequests.length], ["slack", slack.length], ["local_git", localGit.length],
   ]);
 
-  return {
+  const report = {
     generatedAt: new Date().toISOString(),
     yesterday: { items: sections.yesterday, summary: briefingSummary("어제는", sections.yesterday, "어제 완료되거나 갱신된 작업 기록이 없습니다.") },
     today: { items: sections.today, summary: briefingSummary("오늘은", sections.today, "오늘 예정된 일정이나 진행 중인 작업이 없습니다.") },
@@ -187,6 +193,7 @@ export async function collectDailyBriefing(now = new Date()): Promise<DailyBrief
     notices,
     sources: (Object.keys(sourceLabels) as Array<Exclude<DailyBriefingSource, "task">>).map<DailyBriefingSourceSummary>((source) => ({ source, label: sourceLabels[source], count: counts.get(source) || 0 })),
   };
+  return { ...report, markdown: dailyBriefingToMarkdown(report) };
 }
 
 function reportItem(id: string, title: string, detail: string, source: DailyBriefingSource, occurredAt?: string | null, evidence: DailyBriefingEvidence[] = []): DailyBriefingItem {
@@ -200,6 +207,11 @@ function startOfDay(date: Date) { const value = new Date(date); value.setHours(0
 function isWithin(value: string, start: Date, end: Date) { const time = new Date(value).getTime(); return time >= start.getTime() && time < end.getTime(); }
 function slackDate(value: string) { const seconds = Number(value.split(".")[0]); return Number.isFinite(seconds) ? new Date(seconds * 1_000).toISOString() : null; }
 function slackTaskTitle(text: string) { return text.replace(/<[^>]+>/g, " ").replace(/https?:\/\/\S+/g, "").replace(/\s+/g, " ").trim().slice(0, 90) || "Slack 요청 확인"; }
+function cleanSessionText(value: string | null) {
+  if (!value) return "";
+  if (/(?:<instructions>|AGENTS\.md instructions|permission_profile|environment_context|workspace_roots)/i.test(value)) return "";
+  return value.replace(/<[^>]{1,80}>/g, " ").replace(/\\[#`*]/g, " ").replace(/\s+/g, " ").trim().slice(0, 180);
+}
 function localDate(date: Date) { return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`; }
 function formatTime(value: string) { return new Intl.DateTimeFormat("ko-KR", { hour: "2-digit", minute: "2-digit" }).format(new Date(value)); }
 function message(cause: unknown) { return cause instanceof Error ? cause.message : String(cause); }
