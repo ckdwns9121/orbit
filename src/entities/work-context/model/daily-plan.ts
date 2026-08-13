@@ -31,6 +31,19 @@ export function localDateKey(date: Date) {
   return `${year}-${month}-${day}`;
 }
 
+export function dailyPlanDateForTargetAt(targetAt: string | null) {
+  if (!targetAt) return null;
+  const date = new Date(targetAt);
+  return Number.isNaN(date.getTime()) ? null : localDateKey(date);
+}
+
+export function unplannedWorkItems(workItems: WorkItem[], plannedWorkItemIds: Iterable<string>) {
+  const plannedIds = new Set(plannedWorkItemIds);
+  return workItems
+    .filter((item) => item.status !== "done" && !plannedIds.has(item.id))
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+}
+
 export function addLocalDays(dateKey: string, amount: number) {
   const [year, month, day] = dateKey.split("-").map(Number);
   const date = new Date(year, month - 1, day);

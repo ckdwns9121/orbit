@@ -90,6 +90,8 @@ import {
 import type { StatusSuggestion } from "../entities/work-context/model/work-continuity";
 import { CompletionSheet, InterruptionDialog, type InterruptionValues } from "../features/tasks/work-continuity";
 import { completeWorkItem, type CompletionEvidence } from "../entities/work-context/api/completion-repository";
+import { addWorkItemToDailyPlan } from "../entities/work-context/api/daily-plan-repository";
+import { dailyPlanDateForTargetAt } from "../entities/work-context/model/daily-plan";
 import { listSourceSyncStates } from "../entities/work-context/api/source-sync-repository";
 import type { SourceSyncState } from "../entities/work-context/model/work-continuity";
 import { saveSlackMessageToInbox } from "../entities/work-context/api/inbox-repository";
@@ -757,6 +759,8 @@ function TaskComposer({
         priority,
         targetAt: targetAt ? new Date(targetAt).toISOString() : null,
       });
+      const planDate = dailyPlanDateForTargetAt(targetAt ? new Date(targetAt).toISOString() : null);
+      if (planDate) await addWorkItemToDailyPlan(id, planDate);
       await onCreated({ id, title: normalizedTitle, description: normalizedDescription, collectAiContext });
     } catch (cause) {
       setSaveError(cause instanceof Error ? cause.message : String(cause));
@@ -825,7 +829,10 @@ function TaskTargetEditor({ item, onChanged }: { item: WorkItem; onChanged: () =
       if (targetAt && !(await requestTaskReminderPermission())) {
         throw new Error("시스템 설정에서 Orbit의 알림을 허용해주세요.");
       }
-      await updateWorkItemTargetAt(item.id, targetAt ? new Date(targetAt).toISOString() : null);
+      const normalizedTargetAt = targetAt ? new Date(targetAt).toISOString() : null;
+      await updateWorkItemTargetAt(item.id, normalizedTargetAt);
+      const planDate = dailyPlanDateForTargetAt(normalizedTargetAt);
+      if (planDate) await addWorkItemToDailyPlan(item.id, planDate);
       await onChanged();
       setMessage(targetAt ? "목표 시간과 알림을 저장했습니다." : "목표 시간을 해제했습니다.");
     } catch (cause) {

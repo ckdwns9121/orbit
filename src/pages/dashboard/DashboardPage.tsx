@@ -10,6 +10,7 @@ import {
   Circle,
   Focus,
   GripVertical,
+  ListPlus,
   MoreHorizontal,
   Pin,
   PinOff,
@@ -24,6 +25,8 @@ import { listCalendarEvents } from "../../entities/work-context/api/calendar-eve
 import {
   addDailyPriority,
   addWorkItemToDailyPlan,
+  ensureTargetedWorkItemsInDailyPlan,
+  listActivePlannedWorkItemIds,
   listDailyPlanRange,
   listDailyPriorities,
   removeDailyPriority,
@@ -41,7 +44,7 @@ import {
 } from "../../entities/work-context/api/planner-repository";
 import { createWorkItem } from "../../entities/work-context/api/work-item-repository";
 import { isSameDay, type CalendarEvent } from "../../entities/work-context/model/calendar-event";
-import { localDateKey, reorderDailyPriorityIds, type DailyPlanEntry, type DailyPriority } from "../../entities/work-context/model/daily-plan";
+import { localDateKey, reorderDailyPriorityIds, unplannedWorkItems, type DailyPlanEntry, type DailyPriority } from "../../entities/work-context/model/daily-plan";
 import { monthGridDays, type PlannerCategory, type PlannerRoutine } from "../../entities/work-context/model/planner";
 import type { WorkItem } from "../../entities/work-context/model/work-item";
 import "./DashboardPage.scss";
@@ -80,6 +83,8 @@ export default function DashboardPage({
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isPriorityPickerOpen, setIsPriorityPickerOpen] = useState(false);
+  const [isTaskPickerOpen, setIsTaskPickerOpen] = useState(false);
+  const [plannedWorkItemIds, setPlannedWorkItemIds] = useState<string[]>([]);
   const [replacementCandidate, setReplacementCandidate] = useState<WorkItem | null>(null);
   const [draggedPriorityId, setDraggedPriorityId] = useState<string | null>(null);
   const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
@@ -95,22 +100,26 @@ export default function DashboardPage({
     try {
       const [nextCategories, nextRoutines] = await Promise.all([listPlannerCategories(), listPlannerRoutines()]);
       await materializePlannerRoutines(rangeStart, rangeEnd);
-      const [nextEntries, nextEvents, nextPriorities] = await Promise.all([
+      const nextPriorities = await listDailyPriorities(selectedKey);
+      await ensureTargetedWorkItemsInDailyPlan(workItems, rangeStart, rangeEnd);
+      for (const priority of nextPriorities) await addWorkItemToDailyPlan(priority.workItemId, selectedKey);
+      const [nextEntries, nextEvents, nextPlannedWorkItemIds] = await Promise.all([
         listDailyPlanRange(rangeStart, rangeEnd),
         listCalendarEvents(days[0], new Date(days[days.length - 1].getFullYear(), days[days.length - 1].getMonth(), days[days.length - 1].getDate() + 1)),
-        listDailyPriorities(selectedKey),
+        listActivePlannedWorkItemIds(),
       ]);
       setCategories(nextCategories);
       setRoutines(nextRoutines);
       setEntries(nextEntries);
       setEvents(nextEvents);
       setPriorities(nextPriorities);
+      setPlannedWorkItemIds(nextPlannedWorkItemIds);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setIsLoading(false);
     }
-  }, [rangeEnd, rangeStart, selectedKey]);
+  }, [rangeEnd, rangeStart, selectedKey, workItems]);
 
   useEffect(() => {
     setIsLoading(true);
@@ -127,6 +136,8 @@ export default function DashboardPage({
   }));
   const priorityWorkItemIds = new Set(currentPriorities.map((priority) => priority.workItemId));
   const otherEntries = selectedEntries.filter((entry) => !priorityWorkItemIds.has(entry.workItemId));
+  const availableTasks = unplannedWorkItems(workItems, plannedWorkItemIds);
+  const priorityCandidates = workItems.filter((item) => item.status !== "done" && !priorityWorkItemIds.has(item.id));
   const selectedEvents = events.filter((event) => isSameDay(new Date(event.startAt), selectedDate));
   const categoryById = new Map(categories.map((category) => [category.id, category]));
   const selectedCompleted = selectedEntries.filter((entry) => entry.workItem.status === "done").length;
@@ -168,8 +179,9 @@ export default function DashboardPage({
       return;
     }
     try {
+      await addWorkItemToDailyPlan(item.id, selectedKey);
       await addDailyPriority(selectedKey, item.id);
-      await refreshPriorities();
+      await refresh();
       setIsPriorityPickerOpen(false);
       setPriorityAnnouncement(`${item.title}을(를) ${currentPriorities.length + 1}순위 핵심 작업으로 추가했습니다.`);
     } catch (cause) {
@@ -191,11 +203,23 @@ export default function DashboardPage({
     if (!replacementCandidate) return;
     try {
       const nextTitle = replacementCandidate.title;
+      await addWorkItemToDailyPlan(replacementCandidate.id, selectedKey);
       await replaceDailyPriority(priority.id, replacementCandidate.id);
       setReplacementCandidate(null);
       setIsPriorityPickerOpen(false);
-      await refreshPriorities();
+      await refresh();
       setPriorityAnnouncement(`${priority.rank}순위 핵심 작업을 ${nextTitle}(으)로 교체했습니다.`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }
+
+  async function addExistingTask(item: WorkItem) {
+    try {
+      await addWorkItemToDailyPlan(item.id, selectedKey);
+      await refresh();
+      setIsTaskPickerOpen(false);
+      setPriorityAnnouncement(`${item.title}을(를) ${selectedDateLabel.format(selectedDate)} 계획에 추가했습니다.`);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     }
@@ -372,6 +396,9 @@ export default function DashboardPage({
           <p className="sr-only" aria-live="polite">{priorityAnnouncement}</p>
 
           <QuickTaskForm categories={categories} selectedDate={selectedDate} onSubmit={createPlannedTask} />
+          <button className="planner-existing-task-button" type="button" onClick={() => setIsTaskPickerOpen(true)} disabled={availableTasks.length === 0}>
+            <ListPlus size={15} /><span>기존 Task에서 추가</span><em>{availableTasks.length}</em>
+          </button>
 
           <div className="planner-task-list">
             {otherEntries.length > 0 && <div className="planner-other-heading"><strong>다른 할 일</strong><span>{otherEntries.length}</span></div>}
@@ -395,7 +422,7 @@ export default function DashboardPage({
                 </article>
               );
             })}
-            {!isLoading && selectedEntries.length === 0 && <div className="planner-empty"><CalendarDays size={25} /><strong>아직 계획이 없어요</strong><span>위 입력창에서 이 날짜의 첫 할 일을 추가하세요.</span></div>}
+            {!isLoading && selectedEntries.length === 0 && <div className="planner-empty"><CalendarDays size={25} /><strong>아직 계획이 없어요</strong><span>새로 만들거나 기존 Task를 이 날짜에 추가하세요.</span></div>}
           </div>
 
           {selectedEvents.length > 0 && (
@@ -412,9 +439,26 @@ export default function DashboardPage({
       {manager === "category" && <CategoryManager categories={categories} onClose={() => setManager(null)} onChanged={refresh} />}
       {manager === "routine" && <RoutineManager categories={categories} routines={routines} rangeStart={rangeStart} rangeEnd={rangeEnd} onClose={() => setManager(null)} onChanged={async () => { await refresh(); await onChanged(); }} />}
       {manager === "reminder" && <ReminderManager reminders={reminders} onOpen={(item) => { setManager(null); onOpenContext(item); }} onClose={() => setManager(null)} />}
-      {isPriorityPickerOpen && <PriorityPicker candidates={otherEntries.filter((entry) => entry.workItem.status !== "done").map((entry) => entry.workItem)} onSelect={(item) => void addPriority(item)} onClose={() => setIsPriorityPickerOpen(false)} />}
+      {isPriorityPickerOpen && <PriorityPicker candidates={priorityCandidates} onSelect={(item) => void addPriority(item)} onClose={() => setIsPriorityPickerOpen(false)} />}
+      {isTaskPickerOpen && <TaskPicker candidates={availableTasks} selectedDate={selectedDate} onSelect={(item) => void addExistingTask(item)} onClose={() => setIsTaskPickerOpen(false)} />}
       {replacementCandidate && <PriorityReplacement priorities={currentPriorities} candidate={replacementCandidate} onReplace={(priority) => void replacePriority(priority)} onClose={() => setReplacementCandidate(null)} />}
     </main>
+  );
+}
+
+function TaskPicker({ candidates, selectedDate, onSelect, onClose }: { candidates: WorkItem[]; selectedDate: Date; onSelect: (item: WorkItem) => void; onClose: () => void }) {
+  const [query, setQuery] = useState("");
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const filtered = candidates.filter((item) => !normalizedQuery || `${item.title} ${item.goal || ""}`.toLocaleLowerCase().includes(normalizedQuery));
+  return (
+    <ManagerShell title="기존 Task 추가" eyebrow="UNPLANNED TASKS" onClose={onClose}>
+      <p className="planner-priority-dialog-copy">아직 날짜가 없는 미완료 Task를 <strong>{selectedDateLabel.format(selectedDate)}</strong> 계획에 배치합니다.</p>
+      <input className="planner-task-picker-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Task 검색" autoFocus />
+      <div className="planner-priority-picker">
+        {filtered.map((item) => <button type="button" key={item.id} onClick={() => onSelect(item)}><ListPlus size={15} /><span><strong>{item.title}</strong><small>{item.priority?.toUpperCase() || "우선순위 미지정"}</small></span><ChevronRight size={15} /></button>)}
+        {filtered.length === 0 && <div className="planner-manager-empty">추가할 수 있는 Task가 없습니다.</div>}
+      </div>
+    </ManagerShell>
   );
 }
 

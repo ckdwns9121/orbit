@@ -1,5 +1,6 @@
 import type { DailyPlanEntry, DailyPlanState, DailyPriority } from "../model/daily-plan";
-import { isDailyPlanActive, nextDailyPriorityRank } from "../model/daily-plan";
+import { dailyPlanDateForTargetAt, isDailyPlanActive, nextDailyPriorityRank } from "../model/daily-plan";
+import type { WorkItem } from "../model/work-item";
 import { listWorkItems } from "./work-item-repository";
 import { getDatabase } from "./database";
 
@@ -167,6 +168,38 @@ export async function addWorkItemToDailyPlan(workItemId: string, planDate: strin
      ON CONFLICT(work_item_id, plan_date) DO UPDATE SET state = 'planned', updated_at = excluded.updated_at`,
     [crypto.randomUUID(), workItemId, planDate, next_order, now],
   );
+}
+
+export async function listActivePlannedWorkItemIds(): Promise<string[]> {
+  const database = await getDatabase();
+  const rows = await database.select<Array<{ work_item_id: string }>>(
+    `SELECT DISTINCT work_item_id
+     FROM daily_plan_entries
+     WHERE state IN ('planned', 'completed')`,
+  );
+  return rows.map((row) => row.work_item_id);
+}
+
+export async function ensureTargetedWorkItemsInDailyPlan(
+  workItems: WorkItem[],
+  startDate: string,
+  endDate: string,
+) {
+  const database = await getDatabase();
+  const rows = await database.select<Array<{ work_item_id: string; plan_date: string }>>(
+    `SELECT work_item_id, plan_date
+     FROM daily_plan_entries
+     WHERE plan_date BETWEEN $1 AND $2 AND state IN ('planned', 'completed')`,
+    [startDate, endDate],
+  );
+  const plannedKeys = new Set(rows.map((row) => `${row.work_item_id}:${row.plan_date}`));
+  const missing = workItems.flatMap((item) => {
+    if (item.status === "done") return [];
+    const planDate = dailyPlanDateForTargetAt(item.targetAt);
+    if (!planDate || planDate < startDate || planDate > endDate || plannedKeys.has(`${item.id}:${planDate}`)) return [];
+    return [{ workItemId: item.id, planDate }];
+  });
+  for (const item of missing) await addWorkItemToDailyPlan(item.workItemId, item.planDate);
 }
 
 export async function setDailyPlanState(id: string, state: DailyPlanState) {
