@@ -8,6 +8,7 @@ import {
   PanelLeftOpen,
   Plug,
   Settings,
+  TicketCheck,
   type LucideIcon,
 } from "lucide-react";
 import type { SourceSyncState } from "../../entities/work-context/model/work-continuity";
@@ -45,6 +46,7 @@ export default function AppSidebar({
     { section: "tasks", label: "Task", icon: CheckSquare, count: items.filter((item) => item.status !== "done").length },
     { section: "calendar", label: "Calendar", icon: Calendar },
     { section: "sessions", label: "Workspace", icon: Blocks },
+    { section: "jira", label: "Tickets", icon: TicketCheck },
     { section: "chat", label: "Chat", icon: MessageCircle },
   ];
   const hasSyncProblem = sourceSyncStates.some((state) =>
