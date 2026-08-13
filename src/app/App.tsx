@@ -30,7 +30,6 @@ import {
 } from "../entities/work-context/api/ai-session-repository";
 import {
   createWorkItemLink,
-  createSlackMessageLink,
   deleteWorkItemLink,
   extractJiraKey,
   listWorkItemLinks,
@@ -58,7 +57,7 @@ import {
   type JiraIssueDevelopment,
 } from "../entities/work-context/model/jira-development";
 import type { WorkItemLink } from "../entities/work-context/model/work-item-link";
-import type { DailyBriefing, DailyBriefingCandidate } from "../entities/work-context/model/daily-briefing";
+import type { DailyBriefing } from "../entities/work-context/model/daily-briefing";
 import type { JiraIssue, JiraTaskLink } from "../entities/work-context/model/jira-issue";
 import { taskStatusSuggestionForSessions } from "../entities/work-context/model/task-flow";
 import { isTaskSortMode, type TaskSortMode } from "../entities/work-context/model/work-item-sort";
@@ -430,27 +429,6 @@ function App() {
     }
   }
 
-  async function approveDailyBriefing(candidates: DailyBriefingCandidate[]) {
-    const today = dailyPlanDateForTargetAt(new Date().toISOString())!;
-    for (const candidate of candidates) {
-      const id = await createWorkItem({ title: candidate.title, goal: candidate.description, status: "todo", priority: candidate.priority, targetAt: candidate.targetAt });
-      await addWorkItemToDailyPlan(id, today);
-      for (const evidence of candidate.evidence) {
-        if (evidence.source === "jira" && evidence.externalId) await createWorkItemLink(id, "jira", evidence.externalId);
-        if (evidence.source === "github_pr" && evidence.url) await createWorkItemLink(id, "github_pr", evidence.url);
-        if (evidence.source === "slack" && evidence.externalId && evidence.url) {
-          await createSlackMessageLink(id, { id: evidence.externalId, permalink: evidence.url, channelName: evidence.label.replace(/^#/, ""), userName: "Slack", text: evidence.detail });
-        }
-        if (evidence.source === "ai_session" && evidence.externalId) {
-          const [provider, ...sessionParts] = evidence.externalId.split(":");
-          if ((provider === "claude" || provider === "codex") && sessionParts.length) await linkAiSession(provider, sessionParts.join(":"), id);
-        }
-      }
-    }
-    await refresh();
-    setDailyBriefing(null);
-  }
-
   return (
     <div className={`app-shell ${isSidebarCollapsed ? "sidebar-collapsed" : ""} ${focusItem ? "has-focus-lock" : ""}`}>
       {shortcutError && (
@@ -569,7 +547,6 @@ function App() {
           isCollecting={isDailyBriefingCollecting}
           error={dailyBriefingError}
           onCollect={refreshDailyBriefing}
-          onApprove={approveDailyBriefing}
           onClose={() => setIsDailyBriefingOpen(false)}
         />
       )}

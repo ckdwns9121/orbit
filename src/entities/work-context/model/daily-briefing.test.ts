@@ -1,19 +1,19 @@
 import { describe, expect, test } from "bun:test";
-import { briefingPriorityForScore, mergeBriefingEvidence } from "./daily-briefing";
+import { briefingSummary, mergeBriefingEvidence, type DailyBriefingItem } from "./daily-briefing";
 
-describe("daily briefing", () => {
-  test("maps evidence strength to a suggested priority", () => {
-    expect(briefingPriorityForScore(88)).toBe("p1");
-    expect(briefingPriorityForScore(62)).toBe("p2");
-    expect(briefingPriorityForScore(31)).toBe("p3");
+const item = (id: string, title: string): DailyBriefingItem => ({ id, title, detail: "", source: "task", evidence: [] });
+
+describe("daily briefing report", () => {
+  test("summarizes factual report items without inventing work", () => {
+    expect(briefingSummary("오늘은", [item("1", "회의"), item("2", "배포"), item("3", "리뷰")], "없음"))
+      .toBe("오늘은 회의, 배포 외 1건입니다.");
+    expect(briefingSummary("오늘은", [], "예정된 일이 없습니다.")).toBe("예정된 일이 없습니다.");
   });
 
-  test("deduplicates the same source URL", () => {
-    const evidence = [
-      { source: "jira" as const, label: "A", detail: "one", url: "https://jira/A" },
-      { source: "jira" as const, label: "A duplicate", detail: "two", url: "https://jira/A" },
-      { source: "slack" as const, label: "B", detail: "three" },
-    ];
-    expect(mergeBriefingEvidence(evidence)).toHaveLength(2);
+  test("deduplicates the same reference URL", () => {
+    expect(mergeBriefingEvidence([
+      { source: "jira", label: "A", detail: "first", url: "https://jira/A" },
+      { source: "jira", label: "A duplicate", detail: "second", url: "https://jira/A" },
+    ])).toHaveLength(1);
   });
 });

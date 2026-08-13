@@ -1,45 +1,49 @@
-export type DailyBriefingSource = "slack" | "jira" | "ai_session" | "calendar" | "github_pr" | "local_git";
+export type DailyBriefingSource = "slack" | "jira" | "ai_session" | "calendar" | "github_pr" | "local_git" | "task";
 
 export interface DailyBriefingEvidence {
   source: DailyBriefingSource;
-  externalId?: string;
   label: string;
   detail: string;
   url?: string;
 }
 
-export interface DailyBriefingCandidate {
+export interface DailyBriefingItem {
   id: string;
   title: string;
-  description: string;
-  priority: "p1" | "p2" | "p3";
-  targetAt: string | null;
-  score: number;
-  reason: string;
+  detail: string;
+  source: DailyBriefingSource;
+  occurredAt?: string | null;
   evidence: DailyBriefingEvidence[];
 }
 
+export interface DailyBriefingSection {
+  summary: string;
+  items: DailyBriefingItem[];
+}
+
 export interface DailyBriefingSourceSummary {
-  source: DailyBriefingSource;
+  source: Exclude<DailyBriefingSource, "task">;
   label: string;
   count: number;
-  notice?: string;
 }
 
 export interface DailyBriefing {
   generatedAt: string;
-  candidates: DailyBriefingCandidate[];
+  yesterday: DailyBriefingSection;
+  today: DailyBriefingSection;
+  attention: DailyBriefingSection;
+  references: DailyBriefingEvidence[];
   sources: DailyBriefingSourceSummary[];
   notices: string[];
-  usedAi: boolean;
 }
 
-export function briefingPriorityForScore(score: number): DailyBriefingCandidate["priority"] {
-  if (score >= 80) return "p1";
-  if (score >= 55) return "p2";
-  return "p3";
-}
-
-export function mergeBriefingEvidence(evidence: DailyBriefingEvidence[], limit = 4) {
+export function mergeBriefingEvidence(evidence: DailyBriefingEvidence[], limit = 30) {
   return [...new Map(evidence.map((item) => [`${item.source}:${item.url || item.label}`, item])).values()].slice(0, limit);
+}
+
+export function briefingSummary(label: string, items: DailyBriefingItem[], empty: string) {
+  if (!items.length) return empty;
+  const preview = items.slice(0, 2).map((item) => item.title).join(", ");
+  const rest = items.length > 2 ? ` 외 ${items.length - 2}건` : "";
+  return `${label} ${preview}${rest}입니다.`;
 }
