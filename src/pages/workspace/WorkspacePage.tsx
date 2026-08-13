@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { ChevronDown, Clock3, GripVertical, Link2, MoreHorizontal, RefreshCw, Search, X } from "lucide-react";
 import type { WorkItem } from "../../entities/work-context/model/work-item";
 import {
   displaySessionPrompt,
@@ -21,7 +22,7 @@ import type { WorkItemLink } from "../../entities/work-context/model/work-item-l
 import "./WorkspacePage.scss";
 
 type ProviderFilter = "all" | AiProvider;
-const SESSION_ROW_HEIGHT = 70;
+const SESSION_ROW_HEIGHT = 86;
 const SESSION_OVERSCAN = 5;
 
 interface WorkspacePageProps {
@@ -38,6 +39,10 @@ export default function WorkspacePage({ workItems, onWorkItemsChanged, onOpenTas
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [modalSessionKey, setModalSessionKey] = useState<string | null>(null);
+  const [isFilterOpen, setIsFilterOpen] = useState(false);
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [isLinkingTask, setIsLinkingTask] = useState(false);
+  const [taskQuery, setTaskQuery] = useState("");
 
   async function refresh() {
     setIsLoading(true);
@@ -93,9 +98,15 @@ export default function WorkspacePage({ workItems, onWorkItemsChanged, onOpenTas
   const openTasks = workItems.filter((item) => item.status !== "done");
   const recentCount = sessions.filter((session) => sessionActivity(session).isRecentlyActive).length;
   const attentionCount = sessions.filter((session) => sessionActivity(session).needsAttention).length;
+  const filteredOpenTasks = useMemo(() => {
+    const keyword = taskQuery.trim().toLocaleLowerCase();
+    return keyword ? openTasks.filter((item) => item.title.toLocaleLowerCase().includes(keyword)) : openTasks;
+  }, [openTasks, taskQuery]);
 
   const selectSession = useCallback(async (session: AiSession) => {
     setSelectedKey(sessionKey(session));
+    setIsLinkingTask(false);
+    setTaskQuery("");
     if (sessionActivity(session).needsAttention) {
       await acknowledgeAiSession(session.provider, session.sessionId);
       setSessions((current) => current.map((candidate) =>
@@ -119,6 +130,8 @@ export default function WorkspacePage({ workItems, onWorkItemsChanged, onOpenTas
     setSessions((current) => current.map((candidate) =>
       sessionKey(candidate) === sessionKey(session) ? { ...candidate, linkedWorkItemId: createdId } : candidate,
     ));
+    setIsLinkingTask(false);
+    setTaskQuery("");
     await onWorkItemsChanged();
   }
 
@@ -128,36 +141,58 @@ export default function WorkspacePage({ workItems, onWorkItemsChanged, onOpenTas
     setSessions((current) => current.map((candidate) =>
       sessionKey(candidate) === sessionKey(session) ? { ...candidate, linkedWorkItemId } : candidate,
     ));
+    setIsLinkingTask(false);
+    setTaskQuery("");
   }
 
   return (
     <section className="sessions-page">
-      <header className="sessions-toolbar">
-        <div className="session-stats">
-          <Stat label="발견한 세션" value={sessions.length} />
-          <Stat label="최근 활동" value={recentCount} />
-          <Stat label="확인 안 한 변경" value={attentionCount} accent />
-          <Stat label="태스크 연결" value={sessions.filter((session) => session.linkedWorkItemId).length} />
-        </div>
-        <button type="button" onClick={() => void refresh()} disabled={isLoading}>{isLoading ? "스캔 중…" : "다시 스캔"}</button>
-      </header>
-
-      <div className="session-controls">
-        <div className="provider-filter" aria-label="AI 제공자 필터">
-          {(["all", "claude", "codex"] as const).map((provider) => (
-            <button className={filter === provider ? "active" : ""} type="button" key={provider} onClick={() => setFilter(provider)}>
-              {provider === "all" ? "전체" : provider === "claude" ? "Claude" : "Codex"}
-            </button>
-          ))}
-        </div>
-        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="세션, 프롬프트, 프로젝트 검색" aria-label="세션 검색" />
-      </div>
-
       {error ? (
         <div className="session-error"><strong>로컬 세션을 읽지 못했습니다.</strong><span>{error}</span></div>
       ) : (
         <div className="session-layout">
-          <div className="session-list" aria-label="로컬 AI 세션">
+          <div className="session-browser">
+            <header className="session-browser-header">
+              <div>
+                <span className="session-browser-eyebrow">Workspace</span>
+                <h2>AI 작업 세션</h2>
+              </div>
+              <div className="session-browser-actions">
+                <button className="session-icon-button" type="button" onClick={() => setIsSearchOpen((current) => !current)} aria-label="세션 검색">
+                  {isSearchOpen ? <X size={15} /> : <Search size={15} />}
+                </button>
+                <div className="session-filter-menu">
+                  <button type="button" onClick={() => setIsFilterOpen((current) => !current)} aria-expanded={isFilterOpen}>
+                    {filter === "all" ? `세션 ${filtered.length}개` : `${filter === "claude" ? "Claude" : "Codex"} ${filtered.length}개`}
+                    <ChevronDown size={13} />
+                  </button>
+                  {isFilterOpen && (
+                    <div className="session-filter-popover">
+                      {(["all", "codex", "claude"] as const).map((provider) => (
+                        <button
+                          className={filter === provider ? "active" : ""}
+                          type="button"
+                          key={provider}
+                          onClick={() => { setFilter(provider); setIsFilterOpen(false); }}
+                        >
+                          {provider === "all" ? "전체 세션" : provider === "claude" ? "Claude" : "Codex"}
+                          <span>{sessions.filter((session) => provider === "all" || session.provider === provider).length}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </header>
+
+            {isSearchOpen && (
+              <label className="session-search-field">
+                <Search size={14} aria-hidden="true" />
+                <input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="세션 또는 프로젝트 검색" />
+              </label>
+            )}
+
+            <div className="session-list" aria-label="로컬 AI 세션">
             {isLoading && sessions.length === 0 ? <div className="session-empty">로컬 세션을 찾는 중…</div> : filtered.length === 0 ? (
               <div className="session-empty"><strong>표시할 세션이 없습니다</strong><span>Claude Code 또는 Codex 세션이 로컬에 생성되면 여기에 나타납니다.</span></div>
             ) : (
@@ -169,45 +204,79 @@ export default function WorkspacePage({ workItems, onWorkItemsChanged, onOpenTas
                 resetKey={`${filter}:${query}`}
               />
             )}
+            </div>
+            <footer className="session-browser-footer">
+              <span><i className="active" /> 최근 활동 {recentCount}</span>
+              <span><i className={attentionCount > 0 ? "attention" : ""} /> 확인 필요 {attentionCount}</span>
+              <button type="button" onClick={() => void refresh()} disabled={isLoading}>
+                <RefreshCw size={13} className={isLoading ? "is-spinning" : ""} />{isLoading ? "스캔 중" : "새로고침"}
+              </button>
+            </footer>
           </div>
 
           <aside className="session-detail">
             {selected ? (
               <>
                 <div className="session-detail-heading">
-                  <div><span>세션 상세 · {projectName(selected.cwd)}</span><h2>{displaySessionTitle(selected)}</h2></div>
-                  <span className={`provider-pill ${selected.provider}`}><ProviderIcon provider={selected.provider} size={12} />{selected.provider}</span>
+                  <div className={`session-detail-provider ${selected.provider}`}><ProviderIcon provider={selected.provider} size={25} /></div>
+                  <div className="session-detail-title">
+                    <strong>{selected.provider === "claude" ? "Claude" : "Codex"}</strong>
+                    <p>{displaySessionTitle(selected)}</p>
+                    <span><Clock3 size={12} /> {formatClock(selected.modifiedAtMs)} · {projectName(selected.cwd)}</span>
+                  </div>
+                  <button className="session-link-cta" type="button" onClick={() => linkedTask ? onOpenTask(linkedTask.id) : setIsLinkingTask(true)}>
+                    {linkedTask ? "Task 보기" : "Task에 연결"}
+                  </button>
                 </div>
 
-                <dl className="session-meta">
-                  <div><dt>최근 갱신</dt><dd>{formatDateTime(selected.modifiedAtMs)}</dd></div>
-                  <div><dt>모델</dt><dd>{selected.model || "확인되지 않음"}</dd></div>
-                  <div><dt>메시지</dt><dd>{selected.messageCount}개</dd></div>
-                  <div><dt>세션 ID</dt><dd title={selected.sessionId}>{shortId(selected.sessionId)}</dd></div>
-                </dl>
-
-                <div className="prompt-card"><span>시작한 요청</span><p>{displaySessionPrompt(selected.firstPrompt) || "내부 컨텍스트를 제외한 요청이 없습니다."}</p></div>
-                <div className="prompt-card last"><span>마지막 요청</span><p>{displaySessionPrompt(selected.lastPrompt) || "내부 컨텍스트를 제외한 요청이 없습니다."}</p></div>
+                <section className="session-activity-section">
+                  <div className="session-section-heading"><h3>최근 활동</h3><span>{selected.messageCount}개 메시지</span></div>
+                  <div className="session-activity-list">
+                    <ActivityItem label="세션 시작" description={displaySessionPrompt(selected.firstPrompt) || "새 AI 작업 세션을 시작했습니다."} time={formatSessionTime(selected.createdAt, selected.modifiedAtMs)} />
+                    {displaySessionPrompt(selected.lastPrompt) && displaySessionPrompt(selected.lastPrompt) !== displaySessionPrompt(selected.firstPrompt) && (
+                      <ActivityItem label="마지막 요청" description={displaySessionPrompt(selected.lastPrompt) || ""} time={formatClock(selected.modifiedAtMs)} />
+                    )}
+                    <ActivityItem label="로컬 세션 동기화" description={`${selected.model || "AI 모델"} · ${selected.messageCount}개 메시지`} time={formatClock(selected.modifiedAtMs)} muted />
+                  </div>
+                </section>
 
                 <div className="session-task-link">
-                  <div><strong>Orbit Task</strong><span>이 세션을 작업의 컨텍스트로 연결합니다.</span></div>
+                  <div className="session-section-heading"><h3>연결된 Task</h3><span>{linkedTask ? "1개 연결됨" : "연결 없음"}</span></div>
                   {linkedTask ? (
-                    <div className="linked-task">
-                      <button type="button" onClick={() => onOpenTask(linkedTask.id)}><strong>{linkedTask.title}</strong><span>Task에서 보기 →</span></button>
-                      <button type="button" className="unlink-button" onClick={() => void updateLink(selected, "")}>연결 해제</button>
-                    </div>
+                    <article className="linked-task-card">
+                      <div className="linked-task-card-top">
+                        <span className={`task-status-dot ${linkedTask.status}`} />
+                        <small>{statusLabel(linkedTask.status)}</small>
+                        <em>LOCAL</em>
+                        <button type="button" onClick={() => setIsLinkingTask((current) => !current)} aria-label="Task 연결 메뉴"><MoreHorizontal size={17} /></button>
+                      </div>
+                      <button className="linked-task-main" type="button" onClick={() => onOpenTask(linkedTask.id)}>
+                        <strong>{linkedTask.title}</strong>
+                        <span>{linkedTask.goal || linkedTask.nextAction || "연결된 작업 상세를 확인하세요."}</span>
+                      </button>
+                      <div className="linked-task-card-bottom"><GripVertical size={14} /><span>드래그해서 이동</span><span>{selected.provider} 세션 1개 연결</span></div>
+                    </article>
                   ) : (
-                    <>
-                      <select value="" onChange={(event) => void updateLink(selected, event.target.value)}>
-                        <option value="">기존 태스크 선택…</option>
-                        {openTasks.map((item) => <option value={item.id} key={item.id}>{item.title}</option>)}
-                      </select>
-                      <button className="primary-button" type="button" onClick={() => void createTaskFromSession(selected)}>새 태스크로 만들기</button>
-                    </>
+                    <button className="empty-task-link" type="button" onClick={() => setIsLinkingTask(true)}><Link2 size={17} /><span><strong>이 세션을 Task에 연결</strong><small>업무 컨텍스트를 한곳에서 이어보세요.</small></span></button>
+                  )}
+
+                  {isLinkingTask && (
+                    <div className="task-link-popover">
+                      <div className="task-link-popover-heading"><strong>{linkedTask ? "연결 관리" : "Task 선택"}</strong><button type="button" onClick={() => setIsLinkingTask(false)} aria-label="닫기"><X size={15} /></button></div>
+                      <label><Search size={14} /><input value={taskQuery} onChange={(event) => setTaskQuery(event.target.value)} placeholder="Task 검색" autoFocus /></label>
+                      <div className="task-link-options">
+                        {filteredOpenTasks.slice(0, 8).map((item) => <button type="button" key={item.id} onClick={() => void updateLink(selected, item.id)}><span className={`task-status-dot ${item.status}`} /><span>{item.title}</span></button>)}
+                        {filteredOpenTasks.length === 0 && <span className="task-link-empty">검색 결과가 없습니다.</span>}
+                      </div>
+                      <div className="task-link-actions">
+                        {linkedTask && <button type="button" onClick={() => void updateLink(selected, "")}>연결 해제</button>}
+                        <button className="primary-button" type="button" onClick={() => void createTaskFromSession(selected)}>+ 새 Task 만들기</button>
+                      </div>
+                    </div>
                   )}
                 </div>
 
-                <div className="privacy-note">로컬 JSONL에서 필요한 메타데이터와 요청 미리보기만 읽습니다. 대화 원문과 인증 파일은 Orbit DB에 복사하지 않습니다.</div>
+                <button className="session-detail-more" type="button" onClick={() => setModalSessionKey(sessionKey(selected))}>세션 상세 정보 보기</button>
               </>
             ) : <div className="session-empty">세션을 선택하세요.</div>}
           </aside>
@@ -228,8 +297,8 @@ export default function WorkspacePage({ workItems, onWorkItemsChanged, onOpenTas
   );
 }
 
-function Stat({ label, value, accent = false }: { label: string; value: number; accent?: boolean }) {
-  return <div className={accent && value > 0 ? "accent" : ""}><span>{label}</span><strong>{value}</strong></div>;
+function ActivityItem({ label, description, time, muted = false }: { label: string; description: string; time: string; muted?: boolean }) {
+  return <div className={muted ? "muted" : ""}><i /><strong>{label}</strong><p>{description}</p><time>{time}</time></div>;
 }
 
 const SessionRow = memo(function SessionRow({
@@ -252,15 +321,14 @@ const SessionRow = memo(function SessionRow({
       onDoubleClick={() => onOpen(session)}
       aria-pressed={selected}
     >
-      <span className={`provider-mark ${session.provider}`}><ProviderIcon provider={session.provider} size={15} /></span>
+      <span className={`provider-mark ${session.provider}`}><ProviderIcon provider={session.provider} size={21} /></span>
       <span className="session-copy">
         <strong>{displaySessionTitle(session)}</strong>
-        <small>{projectName(session.cwd)} · {formatRelativeTime(session.modifiedAtMs)}</small>
+        <small><Clock3 size={11} /> {formatClock(session.modifiedAtMs)} · {projectName(session.cwd)}</small>
       </span>
       <span className="session-signals">
         {activity.needsAttention && <i aria-label="확인하지 않은 변경" />}
-        {activity.isRecentlyActive && <em>최근 활동</em>}
-        {session.linkedWorkItemId && <small>Task</small>}
+        {!activity.needsAttention && <i className="idle" aria-label="확인한 세션" />}
       </span>
     </button>
   );
@@ -453,12 +521,9 @@ function statusLabel(status: WorkItem["status"]) {
 function sessionKey(session: Pick<AiSession, "provider" | "sessionId">) { return `${session.provider}:${session.sessionId}`; }
 function shortId(id: string) { return id.length > 18 ? `${id.slice(0, 8)}…${id.slice(-6)}` : id; }
 function formatDateTime(value: number) { return new Intl.DateTimeFormat("ko-KR", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(value); }
-function formatRelativeTime(value: number) {
-  const minutes = Math.max(0, Math.floor((Date.now() - value) / 60_000));
-  if (minutes < 1) return "방금 전";
-  if (minutes < 60) return `${minutes}분 전`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}시간 전`;
-  const days = Math.floor(hours / 24);
-  return days < 30 ? `${days}일 전` : formatDateTime(value);
+function formatClock(value: number) { return new Intl.DateTimeFormat("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false }).format(value); }
+function formatSessionTime(value: string | null, fallback: number) {
+  if (!value) return formatClock(fallback);
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? formatClock(fallback) : formatClock(parsed);
 }

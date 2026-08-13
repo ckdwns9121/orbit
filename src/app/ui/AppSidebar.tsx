@@ -1,6 +1,7 @@
 import {
   Calendar,
   CheckSquare,
+  Blocks,
   LayoutDashboard,
   MessageCircle,
   PanelLeftClose,
@@ -43,6 +44,7 @@ export default function AppSidebar({
     { section: "dashboard", label: "Planner", icon: LayoutDashboard },
     { section: "tasks", label: "Task", icon: CheckSquare, count: items.filter((item) => item.status !== "done").length },
     { section: "calendar", label: "Calendar", icon: Calendar },
+    { section: "sessions", label: "Workspace", icon: Blocks },
     { section: "chat", label: "Chat", icon: MessageCircle },
   ];
   const hasSyncProblem = sourceSyncStates.some((state) =>
