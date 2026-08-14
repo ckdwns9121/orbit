@@ -10,6 +10,7 @@ export interface DisplayMessage {
   role: ChatRole;
   content: string;
   streaming?: boolean;
+  agentStatus?: string;
   approvals?: ChatAgentApproval[];
 }
 
@@ -40,7 +41,11 @@ function MeasuredMessage({ message, top, onHeight, onApproveTask, onRejectTask }
     <article className={`chat-message ${message.role} ${message.streaming ? "streaming" : ""}`}>
       <span>{message.role === "user" ? "나" : "✦"}</span>
       <div className="chat-message-content">
-        <ChatMarkdown content={message.content || "답변을 준비하고 있습니다…"} />
+        {message.streaming && message.agentStatus && <div className="chat-agent-status" role="status" aria-live="polite">
+          <i aria-hidden="true" />
+          <span>{message.agentStatus}</span>
+        </div>}
+        {message.content && <ChatMarkdown content={message.content} />}
         {message.approvals?.map((proposal) => <TaskApprovalCard
           key={proposal.id}
           proposal={proposal}

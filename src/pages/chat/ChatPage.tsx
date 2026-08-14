@@ -44,6 +44,13 @@ function groupApprovalsByMessage(approvals: ChatAgentApproval[]): Record<string,
   }, {});
 }
 
+function currentAgentStatus(steps: ChatAgentStepView[]): string {
+  const active = [...steps].reverse().find((step) => step.state === "running" || step.state === "waiting");
+  if (!active) return steps.length ? "도구 결과를 바탕으로 답변을 정리하는 중…" : "요청을 분석하는 중…";
+  if (active.state === "waiting") return `${active.label}…`;
+  return `${active.label} 중…`;
+}
+
 export default function ChatPage() {
   const [threads, setThreads] = useState<ChatThread[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -123,9 +130,15 @@ export default function ChatPage() {
       content,
       approvals: approvalsByMessage[id],
     }));
-    if (isAnswering) result.push({ id: "streaming-assistant", role: "assistant", content: streamingContent, streaming: true });
+    if (isAnswering) result.push({
+      id: "streaming-assistant",
+      role: "assistant",
+      content: streamingContent,
+      streaming: true,
+      agentStatus: streamingContent ? undefined : currentAgentStatus(agentSteps),
+    });
     return result;
-  }, [messages, isAnswering, streamingContent, approvalsByMessage]);
+  }, [messages, isAnswering, streamingContent, approvalsByMessage, agentSteps]);
 
   const updateTaskProposal = useCallback((proposalId: string, update: (proposal: ChatAgentApproval) => ChatAgentApproval) => {
     setApprovalsByMessage((current) => Object.fromEntries(Object.entries(current).map(([messageId, proposals]) => [
@@ -284,7 +297,6 @@ export default function ChatPage() {
     </aside>
     <section className="chat-conversation">
       <ContextStatusPanel sources={contextSources} active={contextStarted} />
-      {agentSteps.length > 0 && <section className="chat-agent-steps" aria-live="polite"><strong>에이전트 실행</strong>{agentSteps.map((step) => <span className={step.state} key={step.id}>{step.state === "complete" ? "✓" : step.state === "waiting" ? "…" : "·"} {step.label}</span>)}</section>}
       {displayMessages.length === 0
         ? <div className="chat-empty"><span>✦</span><h2>Orbit에게 물어보세요</h2><p>Task, Calendar, Jira, GitHub, Slack, Confluence를 연결한 Knowledge Graph로 답합니다.</p><div><button onClick={() => setQuestion("오늘 일정과 우선순위를 정리해줘")}>오늘 일정과 우선순위</button><button onClick={() => setQuestion("2024년 온콜 관련 문서와 대화를 찾아줘")}>문서·대화 검색</button></div></div>
         : <VirtualMessageList messages={displayMessages} onApproveTask={approveTask} onRejectTask={rejectTask} />}
