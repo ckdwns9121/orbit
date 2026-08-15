@@ -1,6 +1,6 @@
 # Orbit
 
-> Jira, GitHub, Slack, Calendar와 AI 작업 세션에 흩어진 맥락을 하나의 Task로 연결하는 macOS 업무 플래너.
+> 흩어진 업무 컨텍스트를 연결해, 사용자가 일을 잊지 않고 즉시 이어서 수행할 수 있도록 만드는 macOS 개인 업무 인텔리전스 플랫폼.
 
 [![CI](https://github.com/ckdwns9121/orbit/actions/workflows/ci.yml/badge.svg)](https://github.com/ckdwns9121/orbit/actions/workflows/ci.yml)
 [![Release macOS](https://github.com/ckdwns9121/orbit/actions/workflows/release.yml/badge.svg)](https://github.com/ckdwns9121/orbit/actions/workflows/release.yml)
@@ -9,9 +9,11 @@
 ![Bun](https://img.shields.io/badge/Bun-1.3-FBF0DF?logo=bun&logoColor=111)
 ![Platform](https://img.shields.io/badge/platform-macOS-black?logo=apple)
 
-![Orbit 작업 보드](docs/assets/orbit-task-board.png)
+![Orbit 작업 보드 — 연결된 업무 맥락을 관리하는 Task 중심 화면](docs/assets/orbit-task-board.png)
 
-Orbit은 단순한 할 일 목록이 아닙니다. 업무를 전환할 때 사라지는 **진행 지점, 다음 행동, 관련 대화와 개발 근거**를 Task에 묶어두고 다시 일을 시작할 때 필요한 맥락을 복원하는 로컬 우선 데스크톱 앱입니다.
+Orbit은 단순한 할 일 목록이 아닙니다. Jira, GitHub, Slack, Calendar, Confluence와 AI 작업 세션에 흩어진 **진행 지점, 다음 행동, 관련 대화와 개발 근거**를 Task 중심으로 연결합니다. 사용자는 새 업무가 끼어들어도 이전 작업의 맥락을 빠르게 복원하고, 완료된 업무를 회고와 성과로 남길 수 있습니다.
+
+Orbit이 없애려는 것은 할 일의 부족이 아니라, **사람이 매번 자신의 업무 상태를 기억하고 복원해야 하는 비용**입니다.
 
 > [!IMPORTANT]
 > Orbit은 현재 개인 사용을 중심으로 빠르게 개발 중인 초기 버전입니다. macOS만 지원하며 외부 연동의 API와 화면은 변경될 수 있습니다.
@@ -19,6 +21,7 @@ Orbit은 단순한 할 일 목록이 아닙니다. 업무를 전환할 때 사�
 ## 목차
 
 - [왜 Orbit인가](#왜-orbit인가)
+- [Orbit이 해결하는 문제](#orbit이-해결하는-문제)
 - [핵심 사용 흐름](#핵심-사용-흐름)
 - [주요 기능](#주요-기능)
 - [기능 화면](#기능-화면)
@@ -33,14 +36,34 @@ Orbit은 단순한 할 일 목록이 아닙니다. 업무를 전환할 때 사�
 
 ## 왜 Orbit인가
 
-AI와 여러 협업 도구를 함께 사용하면 실제 업무 흐름은 쉽게 잘게 쪼개집니다.
+AI와 여러 협업 도구를 함께 사용하면 실제 업무 흐름은 쉽게 잘게 쪼개집니다. 해야 할 일과 상태는 Jira, 논의와 요청은 Slack, 구현 결과는 GitHub, 일정은 Calendar, 문서는 Confluence, 작업 과정은 Codex와 Claude에 남습니다. 이 도구들을 연결하는 최종 책임은 결국 사용자의 기억에 맡겨집니다.
 
 - Jira 티켓을 보다가 Slack 대화를 확인하고 GitHub PR로 이동합니다.
 - Codex나 Claude에게 작업을 맡긴 뒤 다른 일을 시작하면 이전 진행 지점을 잊습니다.
 - 무엇을 먼저 해야 하는지보다 새 알림과 새 요청에 반응하게 됩니다.
+- 실제 진행 상황과 Jira의 상태가 달라지고, 온콜 요청을 찾기 위해 Slack을 다시 뒤집니다.
 - 완료된 업무가 흩어져 있어 회고나 성과 기록을 만들기 어렵습니다.
 
 Orbit은 **Task를 업무의 SSOT(Single Source of Truth)** 로 사용합니다. Jira, PR, commit, Slack 메시지와 AI 세션은 Task를 설명하는 근거이며 Task 자체를 대신하지 않습니다. 사용자는 오늘 할 일을 정하고 한 작업에 집중하며, 중단할 때 체크포인트를 남기고, 완료할 때 결과와 근거를 함께 보관합니다.
+
+## Orbit이 해결하는 문제
+
+Orbit의 핵심은 업무를 더 많이 기록하게 만드는 것이 아니라, 사용자가 기억하지 않아도 시스템이 업무 맥락을 계속 유지하도록 만드는 것입니다.
+
+| 문제 | Orbit의 해결 방식 |
+| --- | --- |
+| 여러 작업을 오갈 때 이전 진행 지점을 잃음 | 마지막 진행 내용, 다음 행동과 관련 근거를 Task에 체크포인트로 보존 |
+| 긴급 업무가 끼어들면 기존 작업을 잊음 | 진행 중인 작업과 우선순위를 한 화면에 유지하고 재개 맥락 제공 |
+| Jira 상태와 실제 작업 상태가 달라짐 | AI 세션, commit, PR과 티켓 상태를 함께 보여주고 불일치 탐지 |
+| 완료한 업무가 회고와 성과로 남지 않음 | 결과, 결정, 위험과 개발 근거를 완료 기록으로 축적 |
+| Slack 요청과 과거 대화를 매번 다시 검색함 | 날짜와 주제 기반 검색, 원문 링크와 Task 연결 |
+
+이를 위해 Orbit은 네 가지 역할을 수행합니다.
+
+1. **맥락 복구** — Task를 다시 열면 관련 Jira, Slack, GitHub, 문서, AI 세션과 마지막 진행 지점을 보여줍니다.
+2. **업무 동기화** — 외부 활동을 근거로 Task와 티켓의 상태 불일치를 발견합니다.
+3. **우선순위 판단** — 마감, 일정, 리뷰 요청과 진행 중인 업무를 함께 보고 지금 할 일을 결정합니다.
+4. **업무 기억과 성과 축적** — 완료된 작업의 과정과 결과물을 회고 가능한 기록으로 보존합니다.
 
 ## 핵심 사용 흐름
 
