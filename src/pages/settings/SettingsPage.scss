@@ -1,7 +1,7 @@
 @use "../../shared/styles/tokens" as *;
 
 .settings-loading { padding: 40px; color: var(--text-muted); font-size: 12px; }
-.settings-page { min-height: calc(100vh - 70px); display: grid; grid-template-columns: 210px minmax(0, 1fr); background: var(--canvas); }
+.settings-page { min-height: calc(100vh - 52px); display: grid; grid-template-columns: 210px minmax(0, 1fr); background: var(--canvas); }
 .settings-nav { align-content: start; gap: 3px; padding: 25px 16px; background: var(--sidebar); border-right: 1px solid var(--border); }
 .settings-nav-heading { padding: 0 10px 12px; color: var(--text-faint); font-size: 10px; font-weight: 700; letter-spacing: .08em; }
 .settings-nav button { display: grid; grid-template-columns: 26px 1fr; align-items: center; min-height: 38px; padding: 0 10px; border: 0; background: transparent; text-align: left; font-size: 11px; }

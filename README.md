@@ -328,10 +328,14 @@ bun run release:check
 Orbit은 기능 설명뿐 아니라 **왜 이런 정책과 구조를 선택했는지**를 repository에 함께 기록합니다.
 
 - [문서 지도와 변경 절차](docs/README.md)
+- [문서 운영 가이드와 템플릿](docs/documentation-guide.md)
+- [UI/UX 디자인 계약](DESIGN.md)
 - [업무 연속성 PRD](docs/prd/prd-orbit-work-continuity.md)
 - [업무 연속성 Spec](docs/prd/spec-orbit-work-continuity.md)
 - [제품 원칙](docs/product/product-principles.md)
 - [Architecture Decision Records](docs/ADR/)
+- [System Architecture](docs/architecture/system-overview.md)
+- [Tech Stack and Engineering Standards](docs/technical/tech-stack.md)
 - [Context Graph Architecture](docs/context-graph-architecture.md)
 - [FSD Architecture](docs/fsd-architecture.md)
 - [수용 기준 검증 증거](docs/work-continuity-acceptance-evidence.md)

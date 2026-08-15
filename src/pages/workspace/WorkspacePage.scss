@@ -1,7 +1,7 @@
 @use "../../shared/styles/tokens" as *;
 
 .sessions-page {
-  height: calc(100vh - 70px);
+  height: calc(100vh - 52px);
   overflow: hidden;
   background: var(--canvas);
 }

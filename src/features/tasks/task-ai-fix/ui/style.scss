@@ -43,7 +43,7 @@
   > footer { display: flex; flex-shrink: 0; justify-content: flex-end; gap: 8px; padding: 16px 22px 20px; border-top: 1px solid var(--border); }
   > footer button { display: inline-flex; min-width: 92px; align-items: center; justify-content: center; gap: 6px; }
 }
-.task-ai-fix-mark { display: grid; width: 40px; height: 40px; place-items: center; color: #fff; background: var(--accent); border-radius: 5px; }
+.task-ai-fix-mark { display: grid; width: 40px; height: 40px; place-items: center; color: #fff; background: var(--ai-action-accent); border-radius: 5px; }
 .task-ai-fix-consent, .task-ai-fix-preview { min-height: 0; padding: 18px 22px 22px; overflow-y: auto; }
 .task-ai-fix-consent > span, .task-ai-fix-preview > span { color: var(--accent); font-size: 10px; font-weight: 750; letter-spacing: .08em; }
 .task-ai-fix-consent h2, .task-ai-fix-preview h2 { margin: 6px 0 0; font-size: 23px; letter-spacing: -.6px; }

@@ -1,14 +1,14 @@
 @use "../../shared/styles/tokens" as *;
 
 .chat-page {
-  height: calc(100vh - 70px);
+  height: calc(100vh - 52px);
   min-height: 0;
   display: grid;
   grid-template-columns: 230px minmax(0, 1fr);
   overflow: hidden;
 }
 .chat-threads { min-height: 0; padding: 16px 12px; background: var(--sidebar); border-right: 1px solid var(--border); overflow-y: auto; }
-.new-chat-button { width: 100%; margin-bottom: 13px; color: var(--accent); border-color: var(--accent); background: var(--surface); }
+.new-chat-button { width: 100%; margin-bottom: 13px; color: var(--foreground); border-color: var(--border); background: var(--surface); }
 .chat-thread-list { display: grid; gap: 4px; }
 .chat-thread { display: grid; grid-template-columns: minmax(0,1fr) 26px; border-radius: $radius-small; }
 .chat-thread.active { background: var(--accent-soft); }

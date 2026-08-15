@@ -1,36 +1,60 @@
-# Orbit 문서 지도
+# Orbit Documentation
 
-이 디렉터리는 Orbit의 제품 요구사항, 설계 제안, 확정된 결정, 상시 정책과 검증 증거를 관리한다. 코드가 현재 동작을 설명한다면 문서는 **왜 그렇게 동작해야 하는지**를 설명한다.
+Orbit의 제품 요구사항, 디자인, 아키텍처, 기술 결정, 정책과 검증 증거를 관리하는 문서 허브다. 코드가 현재 동작을 보여준다면 문서는 **무엇을 왜 만들고, 어떤 경계를 지키며, 결과를 어떻게 검증하는지**를 설명한다.
 
-## 문서 유형
+## Start here
 
-| 유형 | 질문 | 생성 시점 | 변경 방식 |
-| --- | --- | --- | --- |
-| PRD | 무엇을 왜 만드는가? | 제품 범위와 수용기준을 정할 때 | 제품 요구가 바뀌는 PR에서 갱신 |
-| RFC | 어떤 방향을 선택할 것인가? | 복수 대안의 합의가 필요할 때 | 리뷰 중 수정, 승인 후 고정 |
-| Design Document | 선택한 방향을 어떻게 구현·운영할 것인가? | RFC 방향이 정해진 뒤 | 구현과 운영 계약 변경 시 갱신 |
-| ADR | 무엇을 결정했고 왜 다른 대안을 버렸는가? | 결정이 확정된 뒤 | 원문 수정 대신 새 ADR로 대체 |
-| Policy | 구현과 무관하게 항상 지킬 규칙은 무엇인가? | 제품·데이터 불변 규칙이 생길 때 | 정책 변경 PR에서 ADR과 함께 갱신 |
-| Evidence | 수용기준이 실제로 충족되었는가? | 검증 완료 시 | 검증을 다시 실행한 시점에 갱신 |
+| 목적 | 먼저 읽을 문서 |
+| --- | --- |
+| Orbit이 해결하는 문제 이해 | [제품 문제 정의](product-problem.md) |
+| 제품 범위와 수용기준 확인 | [업무 연속성 PRD](prd/prd-orbit-work-continuity.md) |
+| UI/UX 구현 | [DESIGN.md](../DESIGN.md) |
+| 시스템 전체 구조 이해 | [System Architecture](architecture/system-overview.md) |
+| 기술 스택과 개발 규칙 확인 | [Tech Stack](technical/tech-stack.md) |
+| 기존 결정의 이유 확인 | [Architecture Decision Records](ADR/README.md) |
+| 새 문서 작성 | [문서 운영 가이드](documentation-guide.md), [Templates](templates/README.md) |
 
-## 상태
+## Information architecture
 
-- `Draft`: 검토 중이며 구현의 기준이 아니다.
-- `Accepted`: 현재 제품과 구현의 기준이다.
-- `Superseded`: 더 새 문서로 대체되었으며 역사적 근거로만 남긴다.
-- `Deprecated`: 더 이상 적용하지 않지만 대체 문서가 없을 수 있다.
+```text
+Product → PRD → Spec → RFC/Architecture → Technical Design → ADR
+                              ↓                    ↓
+                           Policy              Evidence
+                              ↓                    ↑
+                            Code ───────────── Verification
+```
 
-## 현재 기준 문서
+| 영역 | 소유하는 질문 | 인덱스 |
+| --- | --- | --- |
+| Product | 누구의 어떤 문제를 푸는가? | [product/](product/README.md) |
+| PRD & Spec | 무엇을 만들고 어떻게 동작해야 하는가? | [prd/](prd/README.md) |
+| Design | 어떤 경험과 시각 언어를 제공하는가? | [design/](design/README.md) |
+| Architecture | 시스템 경계와 품질 속성은 무엇인가? | [architecture/](architecture/README.md) |
+| Technical | 구체적으로 어떻게 구현·운영하는가? | [technical/](technical/README.md) |
+| ADR | 무엇을 결정했고 왜 선택했는가? | [ADR/](ADR/README.md) |
+| Policy | 무엇을 항상 지켜야 하는가? | [policies/](policies/README.md) |
+| Evidence | 요구사항이 실제로 충족됐는가? | [evidence/](evidence/README.md) |
+| Templates | 새 문서를 어떻게 시작하는가? | [templates/](templates/README.md) |
 
-### 제품
+## Canonical documents
 
-- [Orbit 업무 연속성 PRD](prd/prd-orbit-work-continuity.md)
-- [Orbit 업무 연속성 Spec](prd/spec-orbit-work-continuity.md)
+### Product and requirements
+
+- [제품 문제 정의](product-problem.md)
+- [제품 솔루션 제안](product-solution.md)
 - [제품 원칙](product/product-principles.md)
-- [기존 문제 정의](product-problem.md)
-- [기존 솔루션 제안](product-solution.md)
+- [업무 연속성 PRD](prd/prd-orbit-work-continuity.md)
+- [업무 연속성 Spec](prd/spec-orbit-work-continuity.md)
 
-### 정책
+### Design and architecture
+
+- [Orbit Design Contract](../DESIGN.md)
+- [System Architecture](architecture/system-overview.md)
+- [Context Graph Architecture](context-graph-architecture.md)
+- [Frontend FSD Architecture](fsd-architecture.md)
+- [Tech Stack and Engineering Standards](technical/tech-stack.md)
+
+### Policies
 
 - [Task 생명주기](policies/task-lifecycle-policy.md)
 - [집중과 중단](policies/focus-and-interruption-policy.md)
@@ -40,7 +64,7 @@
 - [인증정보와 보안](policies/credential-security-policy.md)
 - [데이터베이스 마이그레이션](policies/database-migration-policy.md)
 
-### Architecture Decision Records
+### Decisions
 
 - [ADR-001 Task를 업무 SSOT로 사용](<ADR/[ADR-001] Task를 업무 SSOT로 사용.md>)
 - [ADR-002 로컬 우선 SQLite 저장](<ADR/[ADR-002] 로컬 우선 SQLite 저장.md>)
@@ -50,28 +74,48 @@
 - [ADR-006 프런트엔드 FSD 의존 방향 적용](<ADR/[ADR-006] 프런트엔드 FSD 의존 방향 적용.md>)
 - [ADR-007 Google Calendar에 공용 데스크톱 OAuth 클라이언트 사용](<ADR/[ADR-007] Google Calendar에 공용 데스크톱 OAuth 클라이언트 사용.md>)
 
-### 상세 설계와 검증
+### Evidence and historical context
 
-- [Context Graph Architecture](context-graph-architecture.md)
-- [FSD Architecture](fsd-architecture.md)
 - [업무 연속성 수용 증거](work-continuity-acceptance-evidence.md)
+- [제품 우선순위 회의록 (2026-08-06)](meeting-notes-product-priority-2026-08-06.md)
 
-## 변경 절차
+기존 루트 문서는 링크 호환성을 위해 유지한다. 내용이 크게 변경될 때 현재 정보 구조로 이동하고 모든 참조를 함께 갱신한다.
+
+## Document lifecycle
 
 ```text
-제품 문제·수용기준 변경       → PRD + Spec
-합의가 필요한 새 기술 방향    → RFC → Design Document → ADR
-이미 확정된 결정의 변경       → 새 ADR(기존 ADR 대체) + 관련 Policy
-작은 구현·UI 변경             → PR 설명과 테스트, 필요 시 Spec 갱신
-DB·보안·외부 쓰기 경계 변경   → 반드시 ADR + Policy 검토
+Draft → Proposed → Accepted → Implemented
+                      ├──────→ Superseded
+                      └──────→ Deprecated
 ```
 
-RFC는 `docs/rfc/[RFC-###] 제목.md`, Design Document는 `docs/design-docs/[DD-###] 제목.md`에 둔다. 합의할 제안이 없는 상태에서 빈 문서를 미리 만들지 않는다.
+- 상태 의미, 파일 이름과 metadata 규칙은 [문서 운영 가이드](documentation-guide.md)를 따른다.
+- Architecture·Policy를 바꾸는 구현은 관련 ADR을 검토한다.
+- UI system 변경은 코드보다 먼저 [DESIGN.md](../DESIGN.md)를 갱신한다.
+- 실행하지 않은 검증은 Evidence에 PASS로 기록하지 않는다.
+- secret, 실제 고객명과 비공개 업무 데이터는 문서와 이미지에 포함하지 않는다.
 
-## 문서 작성 규칙
+## Change map
 
-1. 확인할 수 없는 사실은 추측하지 않고 `TBD` 또는 `확인 필요`로 표시한다.
-2. 요구사항과 주요 결정에는 코드·테스트·선행 문서 중 하나 이상의 근거 경로를 연결한다.
-3. ADR은 수정해 결정을 덮어쓰지 않는다. 새 번호의 ADR을 만들고 기존 문서 상태를 `Superseded`로 바꾼다.
-4. Policy를 바꾸는 PR은 영향받는 테스트와 데이터 호환성을 함께 설명한다.
-5. 실행하지 않은 검증을 통과했다고 기록하지 않는다.
+```text
+문제·사용자 가치 변경       → Product brief 또는 PRD
+기능 계약·상태 변경         → PRD AC + Spec
+여러 대안의 합의 필요       → RFC
+시스템 경계 변경            → Architecture + RFC + ADR
+중요 구현·migration 변경    → Technical Design + ADR/Policy 검토
+디자인 시스템 변경          → DESIGN.md + Technical Design
+검증 완료                   → Evidence + 문서 상태 갱신
+```
+
+## Templates
+
+- [Product brief](templates/product-brief-template.md)
+- [PRD](templates/prd-template.md)
+- [Feature Spec](templates/spec-template.md)
+- [RFC](templates/rfc-template.md)
+- [Architecture](templates/architecture-template.md)
+- [Technical Design](templates/technical-design-template.md)
+- [ADR](templates/adr-template.md)
+- [Policy](templates/policy-template.md)
+- [Evidence](templates/evidence-template.md)
+- [Meeting note](templates/meeting-notes-template.md)
