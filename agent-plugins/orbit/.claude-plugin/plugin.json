@@ -1,0 +1,8 @@
+{
+  "name": "orbit",
+  "version": "0.1.0",
+  "description": "Create Orbit tasks and inspect synchronized Jira tickets from Claude Code.",
+  "author": {
+    "name": "Orbit"
+  }
+}

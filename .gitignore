@@ -10,6 +10,8 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+!agent-plugins/orbit/dist/
+!agent-plugins/orbit/dist/server.js
 *.local
 /src-tauri/target/
 .omx/

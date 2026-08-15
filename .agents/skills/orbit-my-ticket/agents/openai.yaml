@@ -1,0 +1,11 @@
+interface:
+  display_name: "Orbit: My Tickets"
+  short_description: "Show my cached Jira tickets"
+  default_prompt: "Show my open Jira tickets and their linked Orbit tasks."
+policy:
+  allow_implicit_invocation: false
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "orbit"
+      description: "Local Orbit task and ticket MCP server"

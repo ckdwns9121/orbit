@@ -1,0 +1,15 @@
+{
+  "name": "orbit-local",
+  "description": "Local Orbit terminal integrations for Claude Code.",
+  "owner": {
+    "name": "Orbit"
+  },
+  "plugins": [
+    {
+      "name": "orbit",
+      "source": "./agent-plugins/orbit",
+      "description": "Create Orbit tasks and inspect synchronized Jira tickets from Claude Code.",
+      "version": "0.1.0"
+    }
+  ]
+}
