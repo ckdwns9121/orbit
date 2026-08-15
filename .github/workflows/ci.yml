@@ -38,6 +38,14 @@ jobs:
       - name: Run frontend tests
         run: bun test
 
+      - name: Type-check MCP server
+        run: bun run mcp:typecheck
+
+      - name: Verify committed MCP bundle
+        run: |
+          bun run mcp:bundle
+          git diff --exit-code -- agent-plugins/orbit/dist/server.js
+
       - name: Verify release versions stay synchronized
         run: bun run release:check
 
