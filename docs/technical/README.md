@@ -8,6 +8,7 @@
 - [Frontend FSD Architecture](../fsd-architecture.md)
 - [Context Graph Architecture](../context-graph-architecture.md)
 - [Orbit MCP and terminal skills](orbit-mcp.md)
+- [Dependency risk register](dependency-risk-register.md)
 - [Technical Design template](../templates/technical-design-template.md)
 
 ## 새 문서가 필요한 경우

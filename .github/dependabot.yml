@@ -10,9 +10,13 @@ updates:
       timezone: Asia/Seoul
     open-pull-requests-limit: 5
     groups:
-      bun-dependencies:
+      bun-compatible-updates:
+        applies-to: version-updates
         patterns:
           - "*"
+        update-types:
+          - minor
+          - patch
     commit-message:
       prefix: "chore(deps)"
 
@@ -25,9 +29,12 @@ updates:
       timezone: Asia/Seoul
     open-pull-requests-limit: 5
     groups:
-      cargo-dependencies:
+      cargo-patch-updates:
+        applies-to: version-updates
         patterns:
           - "*"
+        update-types:
+          - patch
     commit-message:
       prefix: "chore(deps)"
 
@@ -40,8 +47,12 @@ updates:
       timezone: Asia/Seoul
     open-pull-requests-limit: 3
     groups:
-      github-actions:
+      github-actions-compatible-updates:
+        applies-to: version-updates
         patterns:
           - "*"
+        update-types:
+          - minor
+          - patch
     commit-message:
       prefix: "chore(deps)"
