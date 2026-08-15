@@ -7,6 +7,7 @@
 - [Tech stack and engineering standards](tech-stack.md)
 - [Frontend FSD Architecture](../fsd-architecture.md)
 - [Context Graph Architecture](../context-graph-architecture.md)
+- [Orbit MCP and terminal skills](orbit-mcp.md)
 - [Technical Design template](../templates/technical-design-template.md)
 
 ## 새 문서가 필요한 경우
