@@ -102,10 +102,13 @@ import { prepareEnabledCheckpointDraft, recordAutomationApproval } from "../enti
 import { recoverDurableJiraOutbox } from "../features/sources/jira-outbox-recovery";
 import AppSidebar from "./ui/AppSidebar";
 import AppHeader from "./ui/AppHeader";
-import type { PrimarySection } from "./model/navigation";
+import AppTabBar from "./ui/AppTabBar";
+import { isPrimarySection, restoreOpenSections, type PrimarySection } from "./model/navigation";
 
 const TASK_SORT_STORAGE_KEY = "orbit.task-sort";
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "orbit.sidebar-collapsed";
+const OPEN_SECTIONS_STORAGE_KEY = "orbit.open-sections";
+const ACTIVE_SECTION_STORAGE_KEY = "orbit.active-section";
 
 function formatWorkItemCreatedAt(value: string) {
   return new Intl.DateTimeFormat("ko-KR", {
@@ -143,7 +146,13 @@ function App() {
   const [completionEvidence, setCompletionEvidence] = useState<CompletionEvidence[]>([]);
   const [interruptionEvidence, setInterruptionEvidence] = useState<Array<{ label: string; url?: string }>>([]);
   const [interruptionDraft, setInterruptionDraft] = useState<{ checkpoint?: string; nextAction?: string }>({});
-  const [activeSection, setActiveSection] = useState<PrimarySection>("dashboard");
+  const [openSections, setOpenSections] = useState<PrimarySection[]>(() =>
+    restoreOpenSections(window.localStorage.getItem(OPEN_SECTIONS_STORAGE_KEY)),
+  );
+  const [activeSection, setActiveSection] = useState<PrimarySection>(() => {
+    const stored = window.localStorage.getItem(ACTIVE_SECTION_STORAGE_KEY);
+    return isPrimarySection(stored) && openSections.includes(stored) ? stored : openSections[0];
+  });
   const [contextItem, setContextItem] = useState<WorkItem | null>(null);
   const [deleteItem, setDeleteItem] = useState<WorkItem | null>(null);
   const [sessionProgress, setSessionProgress] = useState<Record<string, WorkItemSessionProgress>>({});
@@ -169,19 +178,46 @@ function App() {
   const focusItem = groupedItems.focus[0];
   const quickPanelItems = items.filter((item) => item.status !== "done" && item.status !== "inbox").slice(0, 12);
 
+  const navigateTo = useCallback((section: PrimarySection) => {
+    setActiveSection(section);
+    window.localStorage.setItem(ACTIVE_SECTION_STORAGE_KEY, section);
+    setOpenSections((current) => {
+      if (current.includes(section)) return current;
+      const next = [...current, section];
+      window.localStorage.setItem(OPEN_SECTIONS_STORAGE_KEY, JSON.stringify(next));
+      return next;
+    });
+  }, []);
+
+  const closeSection = useCallback((section: PrimarySection) => {
+    setOpenSections((current) => {
+      const index = current.indexOf(section);
+      if (index < 0) return current;
+      const remaining = current.filter((candidate) => candidate !== section);
+      const next: PrimarySection[] = remaining.length > 0 ? remaining : ["dashboard"];
+      window.localStorage.setItem(OPEN_SECTIONS_STORAGE_KEY, JSON.stringify(next));
+      if (activeSection === section) {
+        const nextActive = next[Math.min(index, next.length - 1)];
+        setActiveSection(nextActive);
+        window.localStorage.setItem(ACTIVE_SECTION_STORAGE_KEY, nextActive);
+      }
+      return next;
+    });
+  }, [activeSection]);
+
   useEffect(() => {
     workspaceRef.current?.scrollTo({ top: 0, left: 0 });
   }, [activeSection]);
 
   useEffect(() => {
     if (!focusItem) return;
-    setActiveSection("tasks");
+    navigateTo("tasks");
     setIsQuickPanelOpen(false);
     setIsComposerOpen(false);
     setDiscoveryTask(null);
     setDeleteItem(null);
     setContextItem((current) => current?.id === focusItem.id ? current : null);
-  }, [focusItem?.id]);
+  }, [focusItem?.id, navigateTo]);
 
   const refresh = useCallback(async () => {
     try {
@@ -221,9 +257,9 @@ function App() {
       openChat: () => undefined,
     } : {
       openQuickPanel: () => setIsQuickPanelOpen(true),
-      openChat: () => { setIsQuickPanelOpen(false); setActiveSection("chat"); },
+      openChat: () => { setIsQuickPanelOpen(false); navigateTo("chat"); },
     });
-  }, [focusItem?.id]);
+  }, [focusItem?.id, navigateTo]);
 
   useEffect(() => {
     void getAppSettings()
@@ -301,12 +337,12 @@ function App() {
       } else if (matchesShortcutEvent(event, shortcuts.chat)) {
         event.preventDefault();
         setIsQuickPanelOpen(false);
-        setActiveSection("chat");
+        navigateTo("chat");
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [focusItem?.id]);
+  }, [focusItem?.id, navigateTo]);
 
   async function commitMove(id: string, status: WorkItemStatus): Promise<boolean> {
     try {
@@ -431,10 +467,17 @@ function App() {
 
   return (
     <div className={`app-shell ${isSidebarCollapsed ? "sidebar-collapsed" : ""} ${focusItem ? "has-focus-lock" : ""}`}>
+      <AppTabBar
+        activeSection={activeSection}
+        openSections={openSections}
+        isFocusLocked={Boolean(focusItem)}
+        onActivate={navigateTo}
+        onClose={closeSection}
+      />
       {shortcutError && (
         <div className="global-shortcut-error" role="alert">
           <div><strong>전역 단축키를 사용할 수 없습니다.</strong><span>{shortcutError}</span></div>
-          <button type="button" onClick={() => { setShortcutError(null); setActiveSection("settings"); }}>Settings 열기</button>
+          <button type="button" onClick={() => { setShortcutError(null); navigateTo("settings"); }}>Settings 열기</button>
           <button type="button" aria-label="알림 닫기" onClick={() => setShortcutError(null)}><X size={14} /></button>
         </div>
       )}
@@ -444,7 +487,7 @@ function App() {
         isFocusLocked={Boolean(focusItem)}
         items={items}
         sourceSyncStates={sourceSyncStates}
-        onNavigate={setActiveSection}
+        onNavigate={navigateTo}
         onToggleCollapsed={() => setIsSidebarCollapsed((current) => {
           window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, String(!current));
           return !current;
@@ -481,7 +524,7 @@ function App() {
             workItems={items}
             onWorkItemsChanged={refresh}
             onOpenTask={(id) => {
-              setActiveSection("tasks");
+              navigateTo("tasks");
               const linked = items.find((item) => item.id === id);
               if (linked) setContextItem(linked);
             }}
@@ -666,16 +709,16 @@ function App() {
           onClose={() => setIsQuickPanelOpen(false)}
           onOpenTask={(item) => {
             setIsQuickPanelOpen(false);
-            setActiveSection("tasks");
+            navigateTo("tasks");
             setContextItem(item);
           }}
           onStartFocus={async (item) => {
             setIsQuickPanelOpen(false);
-            setActiveSection("tasks");
+            navigateTo("tasks");
             await handleMove(item.id, "focus");
           }}
-          onCreateTask={() => { setIsQuickPanelOpen(false); setActiveSection("tasks"); setIsComposerOpen(true); }}
-          onOpenChat={() => { setIsQuickPanelOpen(false); setActiveSection("chat"); }}
+          onCreateTask={() => { setIsQuickPanelOpen(false); navigateTo("tasks"); setIsComposerOpen(true); }}
+          onOpenChat={() => { setIsQuickPanelOpen(false); navigateTo("chat"); }}
         />
       )}
       {activeSection === "tasks" && !focusItem && <TaskAiFix items={items} onApplied={refresh} />}
