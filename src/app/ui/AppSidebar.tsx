@@ -55,7 +55,6 @@ export default function AppSidebar({
 
   return (
     <aside className="sidebar" inert={isFocusLocked ? true : undefined} aria-hidden={isFocusLocked ? true : undefined}>
-      <div className="traffic-lights" aria-hidden="true"><span /><span /><span /></div>
       <div className="brand">
         <div><strong>Orbit</strong><span>{formatToday()}</span></div>
         <button

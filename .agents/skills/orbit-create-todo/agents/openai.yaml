@@ -1,7 +1,7 @@
 interface:
-  display_name: "Orbit: Create Todo"
-  short_description: "Create a task in Orbit"
-  default_prompt: "Create one Orbit task from my request."
+  display_name: "Orbit: Create Todos"
+  short_description: "Create one or multiple Orbit tasks"
+  default_prompt: "Use $orbit-create-todo to create these tasks in Orbit."
 policy:
   allow_implicit_invocation: false
 dependencies:

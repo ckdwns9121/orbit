@@ -1,15 +1,17 @@
 ---
 name: create-todo
-description: Create a task in the user's Orbit app from a short natural-language request. Use when the user explicitly asks to add, create, or remember a todo in Orbit.
+description: Create one or multiple tasks in the user's Orbit app from natural-language requests or explicit task lists. Use when the user explicitly asks to add, create, or remember one or more todos in Orbit.
 disable-model-invocation: true
 allowed-tools: mcp__orbit__create_task
 argument-hint: "<할 일 내용>"
 ---
 
-Create exactly one Orbit task from `$ARGUMENTS`.
+Create Orbit tasks from `$ARGUMENTS`.
 
-1. If the request is empty or the title is genuinely ambiguous, ask one concise question.
-2. Normalize a concise title. Infer optional fields only when the request supports them.
-3. Resolve a relative deadline against the current local date and pass an ISO 8601 value with timezone.
-4. Call the Orbit MCP `create_task` tool once. Do not write to SQLite or Jira directly.
-5. Return the created title, status, deadline if present, and task ID.
+1. If the request is empty, ask for the task. Split only clearly enumerated items: commas, semicolons, numbered or bulleted lines, or separate lines.
+2. If item boundaries are genuinely ambiguous, ask one concise question. Otherwise preserve the user's order.
+3. Normalize a concise title for each item. Infer optional fields only from information attached to that item.
+4. Resolve relative deadlines against the current local date and pass ISO 8601 values with timezone.
+5. Call the Orbit MCP `create_task` tool exactly once per item. Do not write to SQLite or Jira directly.
+6. Do not retry a failed creation automatically. Stop and report partial success plus the failed item.
+7. Return every created title, status, deadline if present, and task ID.

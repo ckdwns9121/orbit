@@ -1,6 +1,12 @@
 # Orbit
 
-> 흩어진 업무 컨텍스트를 연결해, 사용자가 일을 잊지 않고 즉시 이어서 수행할 수 있도록 만드는 macOS 개인 업무 인텔리전스 플랫폼.
+<p align="center">
+  <strong>English</strong> ·
+  <a href="README.ko.md">한국어</a> ·
+  <a href="README.ja.md">日本語</a>
+</p>
+
+> A personal work-intelligence platform for macOS that connects scattered work context so you can remember less and resume work faster.
 
 [![CI](https://github.com/ckdwns9121/orbit/actions/workflows/ci.yml/badge.svg)](https://github.com/ckdwns9121/orbit/actions/workflows/ci.yml)
 [![Release macOS](https://github.com/ckdwns9121/orbit/actions/workflows/release.yml/badge.svg)](https://github.com/ckdwns9121/orbit/actions/workflows/release.yml)
@@ -9,181 +15,181 @@
 ![Bun](https://img.shields.io/badge/Bun-1.3-FBF0DF?logo=bun&logoColor=111)
 ![Platform](https://img.shields.io/badge/platform-macOS-black?logo=apple)
 
-![Orbit 작업 보드 — 연결된 업무 맥락을 관리하는 Task 중심 화면](docs/assets/orbit-task-board.png)
+![Orbit task board — a task-centered view for connected work context](docs/assets/orbit-task-board.png)
 
-Orbit은 단순한 할 일 목록이 아닙니다. Jira, GitHub, Slack, Calendar, Confluence와 AI 작업 세션에 흩어진 **진행 지점, 다음 행동, 관련 대화와 개발 근거**를 Task 중심으로 연결합니다. 사용자는 새 업무가 끼어들어도 이전 작업의 맥락을 빠르게 복원하고, 완료된 업무를 회고와 성과로 남길 수 있습니다.
+Orbit is more than a todo list. It connects the **current state, next action, conversations, and development evidence** scattered across Jira, GitHub, Slack, Calendar, Confluence, and local AI sessions around a single Task. When urgent work interrupts you, Orbit helps restore the context of what you were doing and turns completed work into durable review and achievement records.
 
-Orbit이 없애려는 것은 할 일의 부족이 아니라, **사람이 매번 자신의 업무 상태를 기억하고 복원해야 하는 비용**입니다.
+Orbit targets the cost of making people remember and reconstruct their own work state—not a shortage of todo lists.
 
 > [!IMPORTANT]
-> Orbit은 현재 개인 사용을 중심으로 빠르게 개발 중인 초기 버전입니다. macOS만 지원하며 외부 연동의 API와 화면은 변경될 수 있습니다.
+> Orbit is an early-stage project evolving quickly around personal use. It currently supports macOS only, and integration APIs and screens may change.
 
-## 목차
+## Contents
 
-- [왜 Orbit인가](#왜-orbit인가)
-- [Orbit이 해결하는 문제](#orbit이-해결하는-문제)
-- [핵심 사용 흐름](#핵심-사용-흐름)
-- [주요 기능](#주요-기능)
-- [기능 화면](#기능-화면)
-- [연동 현황](#연동-현황)
-- [설치와 실행](#설치와-실행)
-- [기술 스택](#기술-스택)
-- [아키텍처](#아키텍처)
-- [개발](#개발)
-- [데이터와 보안](#데이터와-보안)
-- [문서와 의사결정](#문서와-의사결정)
-- [기여와 라이선스](#기여와-라이선스)
+- [Why Orbit](#why-orbit)
+- [Problems Orbit solves](#problems-orbit-solves)
+- [Core workflow](#core-workflow)
+- [Features](#features)
+- [Product tour](#product-tour)
+- [Integrations](#integrations)
+- [Install and run](#install-and-run)
+- [Technology](#technology)
+- [Architecture](#architecture)
+- [Development](#development)
+- [Data and security](#data-and-security)
+- [Documentation](#documentation)
+- [Contributing and license](#contributing-and-license)
 
-## 왜 Orbit인가
+## Why Orbit
 
-AI와 여러 협업 도구를 함께 사용하면 실제 업무 흐름은 쉽게 잘게 쪼개집니다. 해야 할 일과 상태는 Jira, 논의와 요청은 Slack, 구현 결과는 GitHub, 일정은 Calendar, 문서는 Confluence, 작업 과정은 Codex와 Claude에 남습니다. 이 도구들을 연결하는 최종 책임은 결국 사용자의 기억에 맡겨집니다.
+Work fragments quickly when AI tools and collaboration services are used together. Tasks and status live in Jira, discussions in Slack, implementation results in GitHub, schedules in Calendar, documents in Confluence, and execution history in Codex or Claude. The user is left responsible for connecting everything from memory.
 
-- Jira 티켓을 보다가 Slack 대화를 확인하고 GitHub PR로 이동합니다.
-- Codex나 Claude에게 작업을 맡긴 뒤 다른 일을 시작하면 이전 진행 지점을 잊습니다.
-- 무엇을 먼저 해야 하는지보다 새 알림과 새 요청에 반응하게 됩니다.
-- 실제 진행 상황과 Jira의 상태가 달라지고, 온콜 요청을 찾기 위해 Slack을 다시 뒤집니다.
-- 완료된 업무가 흩어져 있어 회고나 성과 기록을 만들기 어렵습니다.
+- You jump from a Jira ticket to Slack and then to a GitHub pull request.
+- You delegate work to Codex or Claude, start something else, and lose the previous stopping point.
+- New notifications determine what you do instead of real priorities.
+- Jira status drifts away from actual work, and on-call requests require searching Slack again.
+- Completed work remains fragmented, making retrospectives and performance records difficult.
 
-Orbit은 **Task를 업무의 SSOT(Single Source of Truth)** 로 사용합니다. Jira, PR, commit, Slack 메시지와 AI 세션은 Task를 설명하는 근거이며 Task 자체를 대신하지 않습니다. 사용자는 오늘 할 일을 정하고 한 작업에 집중하며, 중단할 때 체크포인트를 남기고, 완료할 때 결과와 근거를 함께 보관합니다.
+Orbit treats the **Task as the SSOT (Single Source of Truth)**. Jira issues, pull requests, commits, Slack messages, and AI sessions are evidence that explains a Task; they do not replace it. You plan the day, focus on one item, save a checkpoint before switching, and retain outcomes and evidence when work is complete.
 
-## Orbit이 해결하는 문제
+## Problems Orbit solves
 
-Orbit의 핵심은 업무를 더 많이 기록하게 만드는 것이 아니라, 사용자가 기억하지 않아도 시스템이 업무 맥락을 계속 유지하도록 만드는 것입니다.
+Orbit is designed to keep work context alive without demanding more manual memory from the user.
 
-| 문제 | Orbit의 해결 방식 |
+| Problem | Orbit's approach |
 | --- | --- |
-| 여러 작업을 오갈 때 이전 진행 지점을 잃음 | 마지막 진행 내용, 다음 행동과 관련 근거를 Task에 체크포인트로 보존 |
-| 긴급 업무가 끼어들면 기존 작업을 잊음 | 진행 중인 작업과 우선순위를 한 화면에 유지하고 재개 맥락 제공 |
-| Jira 상태와 실제 작업 상태가 달라짐 | AI 세션, commit, PR과 티켓 상태를 함께 보여주고 불일치 탐지 |
-| 완료한 업무가 회고와 성과로 남지 않음 | 결과, 결정, 위험과 개발 근거를 완료 기록으로 축적 |
-| Slack 요청과 과거 대화를 매번 다시 검색함 | 날짜와 주제 기반 검색, 원문 링크와 Task 연결 |
+| Losing the stopping point while switching tasks | Preserve the latest progress, next action, and evidence as a Task checkpoint |
+| Forgetting previous work after an urgent interruption | Keep active work and priorities visible and provide resume context |
+| Jira state drifting from actual work | Show AI sessions, commits, PRs, and ticket state together and detect mismatches |
+| Completed work disappearing instead of becoming a record | Store outcomes, decisions, risks, and development evidence in completion history |
+| Repeatedly searching Slack for requests and past discussion | Search by topic and date, retain source links, and connect messages to Tasks |
 
-이를 위해 Orbit은 네 가지 역할을 수행합니다.
+Orbit performs four roles:
 
-1. **맥락 복구** — Task를 다시 열면 관련 Jira, Slack, GitHub, 문서, AI 세션과 마지막 진행 지점을 보여줍니다.
-2. **업무 동기화** — 외부 활동을 근거로 Task와 티켓의 상태 불일치를 발견합니다.
-3. **우선순위 판단** — 마감, 일정, 리뷰 요청과 진행 중인 업무를 함께 보고 지금 할 일을 결정합니다.
-4. **업무 기억과 성과 축적** — 완료된 작업의 과정과 결과물을 회고 가능한 기록으로 보존합니다.
+1. **Context recovery** — reopen a Task and see related Jira, Slack, GitHub, documents, AI sessions, and the last stopping point.
+2. **Work synchronization** — identify discrepancies between Task and ticket state using external activity as evidence.
+3. **Priority support** — evaluate deadlines, meetings, review requests, and active work together.
+4. **Work memory** — preserve completed work as reusable retrospective and achievement material.
 
-## 핵심 사용 흐름
+## Core workflow
 
 ```text
-Planner에서 오늘 할 일 선택
+Choose today's work in Planner
         ↓
-Task에 Jira · GitHub · Slack · AI 세션 연결
+Connect Jira · GitHub · Slack · AI sessions to a Task
         ↓
-하나의 Task에 집중 시작
+Focus on one Task
         ↓
-중단 시 현재까지 한 것과 다음 행동 기록
+Save progress and the next action before switching
         ↓
-완료 시 결과 · 결정 · 위험 · 근거 저장
+Store outcomes · decisions · risks · evidence on completion
 ```
 
-Planner에서 생성한 할 일도 별도 복사본이 아니라 즉시 Task 보드의 동일한 작업으로 표시됩니다.
+A todo created in Planner is the same underlying Task shown on the Task board, not a separate copy.
 
-## 주요 기능
+## Features
 
-### Planner와 Task
+### Planner and Tasks
 
-- 월간 Planner와 날짜별 할 일
-- 업무·공부·개인 작업을 나누는 카테고리
-- 요일 기반 반복 루틴과 리마인더
-- 오늘 반드시 끝낼 핵심 작업 3개 고정
-- 할 일·진행 중·완료 Kanban과 드래그 앤 드롭
-- 우선순위, 목표 시간, 생성일 기준 정렬
+- Monthly planner and date-based todos
+- Categories for work, study, and personal items
+- Weekday-based routines and reminders
+- Pin up to three must-finish tasks for today
+- Todo, in-progress, and done Kanban lanes with drag and drop
+- Sorting by priority, target time, and creation time
 
-### 집중과 업무 연속성
+### Focus and work continuity
 
-- 동시에 하나만 허용하는 집중 모드
-- 집중 중 다른 작업과 앱 영역 비활성화
-- 작업 전환 전 체크포인트와 다음 행동 기록
-- 연결 근거를 포함한 완료 회고 또는 회고 건너뛰기
-- 목표 시간이 지난 미완료 Task의 macOS 알림
-- 설정한 주기마다 보내는 스트레칭 알림
+- A single-focus mode that allows only one focused Task
+- Temporary deactivation of unrelated work and navigation while focused
+- Required checkpoint and next action before switching work
+- Completion reflection with connected evidence, or an explicit skip
+- macOS notifications for overdue unfinished Tasks
+- Configurable stretch reminders
 
-### 연결된 업무 맥락
+### Connected work context
 
-- 담당 Jira 티켓과 Task 연결
-- 내가 만든 PR과 리뷰 요청받은 PR 확인
-- PR, commit, branch와 Jira development 정보 추적
-- Slack 메시지 검색과 원문 링크 연결
-- Codex·Claude 로컬 세션 탐색과 Task 연결
-- Google Calendar 일정 읽기 전용 동기화
-- Task와 외부 근거를 탐색하는 Knowledge Graph
+- Link assigned Jira tickets to Tasks
+- Review pull requests you authored and pull requests awaiting your review
+- Track PRs, commits, branches, and Jira development information
+- Search Slack messages and retain source permalinks
+- Discover local Codex and Claude sessions and connect them to Tasks
+- Read-only Google Calendar synchronization
+- Knowledge Graph exploration across Tasks and external evidence
 
-### AI와 자동화
+### AI and automation
 
-- 업무 데이터에 근거한 Chat 스트리밍 응답
-- 대화에서 제안된 Task를 사용자 승인 후 생성
-- Task 설명을 바탕으로 관련 세션·티켓·메시지 탐색
-- 전체 Task의 우선순위와 목표 시간 제안
-- 외부 변경은 preview와 사용자 승인 이후에만 실행
+- Streaming Chat answers grounded in connected work data
+- User approval before a Task proposed in Chat is created
+- Discovery of relevant sessions, tickets, and messages from a Task description
+- AI suggestions for priorities and target times across Tasks
+- Preview and explicit approval before any external write
 
-### macOS 경험
+### macOS experience
 
-- 메뉴바 Quick View에서 집중 작업과 다음 작업 확인
-- 전역 단축키로 Task 패널과 Chat 열기
-- 목표 시간·스트레칭 알림
-- 시스템 테마와 라이트·다크 테마
-- macOS Keychain 기반 인증정보 저장
+- Menu bar Quick View for focused and upcoming work
+- Global shortcuts for the Task panel and Chat
+- Target-time and stretch notifications
+- System, light, and dark themes
+- Credentials stored in macOS Keychain
 
-## 기능 화면
+## Product tour
 
-아래 이미지는 공개 문서를 위해 만든 가상 데이터 화면입니다. 실제 사용자, 회사, 저장소 또는 업무 정보는 포함하지 않습니다.
+The screenshots below use fictional public-documentation data and contain no real user, company, repository, or work information.
 
-### AI 작업 세션 연결
+### AI session linking
 
-Codex와 Claude의 로컬 작업 세션을 탐색하고 하나의 Orbit Task에 연결합니다. 세션의 최근 활동과 연결된 작업을 함께 확인할 수 있습니다.
+Discover local Codex and Claude sessions and connect them to an Orbit Task. Recent activity and linked work stay visible together.
 
-![Orbit AI 작업 세션 연결](docs/assets/orbit-ai-sessions.png)
+![Orbit AI session linking](docs/assets/orbit-ai-sessions.png)
 
-### 단일 작업 집중 모드
+### Single-task focus mode
 
-진행 중인 Task 하나에 집중을 시작하면 다른 작업과 내비게이션을 잠시 비활성화합니다. 집중 종료, 완료와 컨텍스트 확인 동작만 남겨 불필요한 전환을 줄입니다.
+Starting focus on one Task temporarily disables other work and navigation, leaving only context, completion, and exit actions available.
 
-![Orbit 단일 작업 집중 모드](docs/assets/orbit-focus-mode.png)
+![Orbit single-task focus mode](docs/assets/orbit-focus-mode.png)
 
-### Jira 티켓과 개발 근거
+### Jira tickets and development evidence
 
-내 담당 Jira 티켓을 검색하고 상태별로 확인합니다. 선택한 티켓의 branch, commit과 pull request를 추적하고 Orbit Task에 연결할 수 있습니다.
+Search assigned Jira tickets by state, inspect branches, commits, and pull requests, and connect the evidence to an Orbit Task.
 
-![Orbit Jira 티켓 연동](docs/assets/orbit-jira-tickets.png)
+![Orbit Jira integration](docs/assets/orbit-jira-tickets.png)
 
-### 근거 기반 AI Chat
+### Grounded AI Chat
 
-현재 Task, Calendar와 연결된 업무 데이터를 근거로 답변합니다. AI가 새 Task를 제안하더라도 사용자 승인을 받아야 실제 작업으로 생성됩니다.
+Ask questions against current Tasks, Calendar, and connected work data. AI-proposed Tasks require user approval before creation.
 
-![Orbit 근거 기반 AI Chat](docs/assets/orbit-ai-chat.png)
+![Orbit grounded AI Chat](docs/assets/orbit-ai-chat.png)
 
-### Google Calendar 읽기 전용 연동
+### Read-only Google Calendar
 
-Google Calendar 일정을 주간 화면에서 확인하고 오늘의 일정과 집중 시간을 함께 계획합니다. Orbit은 Google 원본 일정을 수정하거나 삭제하지 않습니다.
+Review Google Calendar events in a weekly view and plan meetings alongside focus time. Orbit never edits or deletes the source calendar event.
 
-![Orbit Google Calendar 연동](docs/assets/orbit-calendar.png)
+![Orbit Google Calendar integration](docs/assets/orbit-calendar.png)
 
-## 연동 현황
+## Integrations
 
-| 서비스 | 제공 기능 | 인증 방식 |
+| Service | Capabilities | Authentication |
 | --- | --- | --- |
-| Jira Cloud | 내 담당 티켓, 상태, Task 연결, development 정보 | 사이트 URL + Atlassian API token |
-| Confluence | 권한이 있는 문서 검색과 업무 근거 연결 | Jira와 동일한 Atlassian 계정 |
-| GitHub | 내가 만든 PR, 리뷰 요청 PR, commit·branch 추적 | 로컬 `gh` 및 Git repository |
-| Slack | 메시지 검색, permalink 보관, Task 변환 | Slack OAuth token |
-| Google Calendar | 일정 제목·시간·장소 읽기 전용 동기화 | 시스템 브라우저 OAuth + PKCE |
-| Codex / Claude | 로컬 작업 세션 탐색, 별칭, Task 연결 | 로컬 세션 파일 |
-| OpenAI / Claude / GLM | Chat, Task 분석과 자동화 제안 | OAuth 또는 provider API key |
+| Jira Cloud | Assigned tickets, state, Task links, development data | Site URL + Atlassian API token |
+| Confluence | Search accessible pages and connect work evidence | Same Atlassian account as Jira |
+| GitHub | Authored PRs, review requests, commit and branch tracking | Local `gh` and Git repository |
+| Slack | Message search, permalink retention, Task conversion | Slack OAuth token |
+| Google Calendar | Read-only event title, time, and location sync | System-browser OAuth + PKCE |
+| Codex / Claude | Local session discovery, aliases, Task links | Local session files |
+| OpenAI / Claude / GLM | Chat, Task analysis, automation suggestions | OAuth or provider API key |
 
-연동은 선택 사항입니다. 외부 서비스를 연결하지 않아도 Planner와 Task는 로컬 앱으로 사용할 수 있습니다.
+Every integration is optional. Planner and Tasks work as a local app without connecting an external service.
 
-## 설치와 실행
+## Install and run
 
-### 다운로드
+### Download
 
-배포 빌드는 [GitHub Releases](https://github.com/ckdwns9121/orbit/releases)에서 제공할 예정입니다. 아직 공개 Release가 없다면 아래 개발 실행 방법으로 사용할 수 있습니다.
+Release builds will be available from [GitHub Releases](https://github.com/ckdwns9121/orbit/releases). Until a public release is available, run Orbit from source.
 
-### 요구사항
+### Requirements
 
-- macOS 13 이상
+- macOS 13 or later
 - [Bun](https://bun.sh/) 1.3.6
 - Rust stable
 - Xcode Command Line Tools
@@ -192,7 +198,7 @@ Google Calendar 일정을 주간 화면에서 확인하고 오늘의 일정과 �
 xcode-select --install
 ```
 
-### 소스에서 실행
+### Run from source
 
 ```bash
 git clone https://github.com/ckdwns9121/orbit.git
@@ -201,45 +207,45 @@ bun install --frozen-lockfile
 bun run tauri dev
 ```
 
-처음 알림을 사용하는 경우 macOS가 Notification 권한을 요청합니다. 외부 서비스는 앱의 `Settings`에서 필요한 항목만 연결하면 됩니다.
+macOS requests Notification permission when a notification feature is first used. Connect only the services you need from `Settings`.
 
-### macOS 앱 빌드
+### Build the macOS app
 
-현재 Mac 아키텍처용 앱과 DMG를 생성합니다.
+Build an App and DMG for the current Mac architecture:
 
 ```bash
 bun run bundle:mac
 ```
 
-Apple Silicon과 Intel을 모두 포함한 Universal 빌드는 두 Rust target을 먼저 설치해야 합니다.
+For a Universal build containing Apple Silicon and Intel binaries:
 
 ```bash
 rustup target add aarch64-apple-darwin x86_64-apple-darwin
 bun run bundle:mac:universal
 ```
 
-생성물은 `src-tauri/target/release/bundle/` 아래에서 확인할 수 있습니다.
+Artifacts are written under `src-tauri/target/release/bundle/`.
 
-## 기술 스택
+## Technology
 
-| 영역 | 기술 |
+| Area | Technology |
 | --- | --- |
 | Desktop shell | Tauri 2 |
 | Native backend | Rust 2021, reqwest, rustls |
 | Frontend | React 19, TypeScript 5.8 |
-| Build tool | Vite 7, Bun 1.3.6 |
+| Build | Vite 7, Bun 1.3.6 |
 | Styling | Sass/SCSS, Lucide React |
 | Local database | SQLite, Tauri SQL plugin |
 | Secret storage | macOS Keychain, Rust `keyring` |
-| Native features | Tray, global shortcut, notification, opener plugins |
+| Native features | Tray, global shortcuts, notifications, opener plugins |
 | Testing | Bun Test, Cargo Test |
 | Delivery | GitHub Actions, Tauri Action |
 
-## 아키텍처
+## Architecture
 
 ```mermaid
 flowchart LR
-  subgraph Sources[업무 소스]
+  subgraph Sources[Work sources]
     Jira
     GitHub
     Slack
@@ -266,7 +272,7 @@ flowchart LR
   Rust --> Keychain
 ```
 
-프런트엔드는 Feature-Sliced Design의 단방향 의존 규칙을 따릅니다.
+The frontend follows the one-way dependency rule of Feature-Sliced Design:
 
 ```text
 app → pages → widgets → features → entities → shared
@@ -274,43 +280,41 @@ app → pages → widgets → features → entities → shared
 
 ```text
 src/
-├── app/         # 앱 초기화, 레이아웃, 내비게이션
-├── pages/       # Planner, Calendar, Chat, Graph, Settings 화면
-├── widgets/     # 메뉴바 Quick View 같은 복합 UI
-├── features/    # 집중, 동기화, Task 연결, 알림 같은 사용자 행동
-├── entities/    # WorkItem 및 외부 컨텍스트 모델과 repository
-├── shared/      # 공통 UI, theme, SCSS token
-└── tests/       # 기능 경계와 통합 테스트
+├── app/         # Bootstrap, shell, and navigation
+├── pages/       # Planner, Calendar, Chat, Graph, Settings
+├── widgets/     # Composite UI such as menu bar Quick View
+├── features/    # Focus, sync, Task linking, notifications
+├── entities/    # WorkItem and external-context models and repositories
+├── shared/      # Shared UI, theme, and SCSS tokens
+└── tests/       # Feature-boundary and integration tests
 
 src-tauri/
-├── migrations/  # 순차 적용되는 SQLite schema migration
-└── src/         # Tauri command, OAuth, 외부 API adapter
+├── migrations/  # Sequential SQLite schema migrations
+└── src/         # Tauri commands, OAuth, and external API adapters
 ```
 
-### 핵심 설계 원칙
+### Design principles
 
-1. **Task가 SSOT다.** 외부 티켓과 대화는 Task에 연결된 근거다.
-2. **로컬이 우선이다.** 업무 데이터는 사용자의 SQLite에 저장한다.
-3. **집중은 하나만 가능하다.** 전환에는 체크포인트가 필요하다.
-4. **외부 쓰기는 승인받는다.** preview, revision 검증과 복구 경계를 거친다.
-5. **그래프는 projection이다.** 원본을 오염시키지 않고 언제든 재구축할 수 있다.
-6. **비밀은 DB에 넣지 않는다.** token과 API key는 Keychain에 저장한다.
+1. **The Task is the SSOT.** External tickets and conversations are linked evidence.
+2. **Local first.** Work data remains in the user's SQLite database.
+3. **Only one focus.** Switching focused work requires a checkpoint.
+4. **External writes require approval.** They pass through preview, revision validation, and recovery boundaries.
+5. **The graph is a projection.** It can be rebuilt without mutating canonical records.
+6. **Secrets do not belong in the database.** Tokens and API keys are stored in Keychain.
 
-## 개발
+## Development
 
-### 자주 쓰는 명령어
-
-| 명령어 | 설명 |
+| Command | Description |
 | --- | --- |
-| `bun run tauri dev` | Vite와 Tauri 개발 앱 실행 |
-| `bun run build` | TypeScript 검사와 production frontend build |
-| `bun test` | 프런트엔드 unit·integration test 실행 |
-| `bun run verify:fsd` | FSD 폴더 구조와 의존 방향 검사 |
-| `cargo test --manifest-path src-tauri/Cargo.toml` | Rust test 실행 |
-| `bun run release:check` | package, Tauri, Cargo 버전 일치 검사 |
-| `bun run bundle:mac` | macOS App과 DMG 빌드 |
+| `bun run tauri dev` | Run Vite and the Tauri development app |
+| `bun run build` | Type-check and build the production frontend |
+| `bun test` | Run frontend unit and integration tests |
+| `bun run verify:fsd` | Verify FSD structure and dependency direction |
+| `cargo test --manifest-path src-tauri/Cargo.toml` | Run Rust tests |
+| `bun run release:check` | Verify package, Tauri, and Cargo versions |
+| `bun run bundle:mac` | Build the macOS App and DMG |
 
-### 변경 전 권장 검증
+Recommended validation before a change:
 
 ```bash
 bun run verify:fsd
@@ -321,52 +325,52 @@ cargo test --manifest-path src-tauri/Cargo.toml --locked
 bun run release:check
 ```
 
-### CI와 릴리스
+### CI and release
 
-`.github/workflows/ci.yml`은 `main` 변경마다 FSD, TypeScript build, Bun test와 Rust test를 실행합니다. `.github/workflows/release.yml`은 `vX.Y.Z` 태그 또는 수동 실행으로 Universal macOS 앱과 DMG를 만들어 Draft Release에 첨부합니다.
+`.github/workflows/ci.yml` runs FSD verification, the TypeScript build, Bun tests, and Rust tests for changes to `main`. `.github/workflows/release.yml` creates a Universal macOS App and DMG for `vX.Y.Z` tags or manual runs and attaches them to a draft release.
 
-외부 배포는 Developer ID 서명과 Apple notarization을 권장합니다. 관련 secret 이름과 상세 절차는 [릴리스 워크플로](.github/workflows/release.yml)에서 확인할 수 있습니다.
+Developer ID signing and Apple notarization are recommended for external distribution. See the [release workflow](.github/workflows/release.yml) for secret names and details.
 
-## 데이터와 보안
+## Data and security
 
-- Task, Planner, 연결 메타데이터와 Graph index는 로컬 SQLite에 저장됩니다.
-- API token, OAuth refresh token과 AI API key는 macOS Keychain에 저장됩니다.
-- 설정 화면은 저장된 secret 원문을 다시 표시하지 않습니다.
-- Google Calendar는 일정 event 읽기 전용 scope만 요청합니다.
-- password, token, authorization, cookie 패턴은 로그와 index 저장 전에 마스킹합니다.
-- 외부 API 실패를 빈 성공으로 처리하지 않고 fresh·stale·failure 상태를 구분합니다.
-- 삭제와 상태 전이는 SQLite trigger와 revision 검증으로 데이터 일관성을 지킵니다.
+- Tasks, Planner data, link metadata, and the Graph index are stored in local SQLite.
+- API tokens, OAuth refresh tokens, and AI API keys are stored in macOS Keychain.
+- Settings never reveal a stored secret value.
+- Google Calendar requests read-only event scopes.
+- Password, token, authorization, and cookie patterns are masked before logging or indexing.
+- External API results distinguish fresh, stale, and failure states instead of treating failure as an empty success.
+- SQLite triggers and revision checks preserve consistency across deletion and state transitions.
 
-로컬 DB의 기본 위치는 다음과 같습니다.
+Default local database path:
 
 ```text
 ~/Library/Application Support/com.orbit.desktop/orbit.db
 ```
 
 > [!CAUTION]
-> 개발용 ad-hoc 서명 앱은 다시 빌드할 때 코드 identity가 바뀌어 Keychain 권한을 다시 요청할 수 있습니다. 안정적인 배포 경험에는 동일한 Developer ID로 서명된 빌드를 사용해야 합니다.
+> Rebuilding an ad-hoc signed development app can change its code identity and trigger another Keychain permission prompt. A consistently signed Developer ID build is required for a stable distribution experience.
 
-## 문서와 의사결정
+## Documentation
 
-Orbit은 기능 설명뿐 아니라 **왜 이런 정책과 구조를 선택했는지**를 repository에 함께 기록합니다.
+Orbit records not only what a feature does, but why its policies and architecture exist.
 
-- [문서 지도와 변경 절차](docs/README.md)
-- [문서 운영 가이드와 템플릿](docs/documentation-guide.md)
-- [UI/UX 디자인 계약](DESIGN.md)
-- [업무 연속성 PRD](docs/prd/prd-orbit-work-continuity.md)
-- [업무 연속성 Spec](docs/prd/spec-orbit-work-continuity.md)
-- [제품 원칙](docs/product/product-principles.md)
+- [Documentation map and change process](docs/README.md)
+- [Documentation guide and templates](docs/documentation-guide.md)
+- [UI/UX design contract](DESIGN.md)
+- [Work Continuity PRD](docs/prd/prd-orbit-work-continuity.md)
+- [Work Continuity specification](docs/prd/spec-orbit-work-continuity.md)
+- [Product principles](docs/product/product-principles.md)
 - [Architecture Decision Records](docs/ADR/)
-- [System Architecture](docs/architecture/system-overview.md)
-- [Tech Stack and Engineering Standards](docs/technical/tech-stack.md)
-- [Context Graph Architecture](docs/context-graph-architecture.md)
-- [FSD Architecture](docs/fsd-architecture.md)
-- [수용 기준 검증 증거](docs/work-continuity-acceptance-evidence.md)
+- [System architecture](docs/architecture/system-overview.md)
+- [Technology stack and engineering standards](docs/technical/tech-stack.md)
+- [Context Graph architecture](docs/context-graph-architecture.md)
+- [FSD architecture](docs/fsd-architecture.md)
+- [Acceptance evidence](docs/work-continuity-acceptance-evidence.md)
 
-정책이나 아키텍처 경계를 바꾸는 변경은 관련 PRD, Policy 또는 ADR도 함께 갱신합니다.
+Changes to policy or architecture boundaries should update the related PRD, policy, or ADR.
 
-## 기여와 라이선스
+## Contributing and license
 
-버그 제보와 기능 제안은 [GitHub Issues](https://github.com/ckdwns9121/orbit/issues)를 이용해주세요. 코드를 변경할 때는 기존 FSD 의존 방향, 로컬 우선 저장 원칙과 외부 쓰기 승인 경계를 유지하고 위의 전체 검증을 실행해주세요.
+Use [GitHub Issues](https://github.com/ckdwns9121/orbit/issues) for bug reports and feature proposals. Code contributions should preserve the existing FSD dependency direction, local-first storage policy, and external-write approval boundary, and should run the full validation suite above.
 
-현재 repository에는 별도 오픈소스 라이선스가 지정되어 있지 않습니다. 따라서 공개된 소스의 사용·수정·재배포 권한이 자동으로 부여되지는 않습니다. 정식 외부 기여와 재배포를 받기 전에 라이선스를 확정할 예정입니다.
+This repository does not currently declare an open-source license. Public source code is therefore not automatically licensed for use, modification, or redistribution. A license should be selected before accepting formal external contributions and redistribution.
