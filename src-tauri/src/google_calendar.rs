@@ -17,6 +17,7 @@ const CALENDAR_SCOPE: &str =
     "openid email https://www.googleapis.com/auth/calendar.events.readonly";
 const GOOGLE_OAUTH_CLIENT_ID: &str =
     "995704849590-4mv8lvi66s9b9jbgc5vl1krab1a0ic20.apps.googleusercontent.com";
+const GOOGLE_OAUTH_CLIENT_SECRET: Option<&str> = option_env!("ORBIT_GOOGLE_OAUTH_CLIENT_SECRET");
 const REFRESH_TOKEN_SECRET_ID: &str = "google_refresh_token";
 
 #[derive(Serialize)]
@@ -133,13 +134,14 @@ pub async fn connect_google_calendar(app: AppHandle) -> Result<GoogleOAuthResult
 
         let code = wait_for_oauth_callback(listener, &redirect_uri, &state)?;
         let client = http_client()?;
-        let form = vec![
+        let mut form = vec![
             ("client_id", GOOGLE_OAUTH_CLIENT_ID.to_string()),
             ("code", code),
             ("code_verifier", verifier),
             ("grant_type", "authorization_code".into()),
             ("redirect_uri", redirect_uri),
         ];
+        append_google_client_secret(&mut form)?;
         let token: TokenResponse = send_token_request(&client, &form)?;
         let refresh_token = token.refresh_token.ok_or_else(|| {
             "Google에서 갱신 토큰을 보내지 않았습니다. 연결을 해제한 뒤 다시 로그인해주세요."
@@ -173,11 +175,12 @@ pub async fn sync_google_calendar(
     tauri::async_runtime::spawn_blocking(move || {
         let refresh_token = super::get_secret(REFRESH_TOKEN_SECRET_ID)?;
         let client = http_client()?;
-        let form = vec![
+        let mut form = vec![
             ("client_id", GOOGLE_OAUTH_CLIENT_ID.to_string()),
             ("refresh_token", refresh_token),
             ("grant_type", "refresh_token".into()),
         ];
+        append_google_client_secret(&mut form)?;
         let token: TokenResponse = send_token_request(&client, &form)?;
         fetch_events(&client, &token.access_token, sync_token, time_min, time_max)
     })
@@ -187,8 +190,7 @@ pub async fn sync_google_calendar(
 
 #[tauri::command]
 pub fn disconnect_google_calendar() -> Result<(), String> {
-    super::delete_internal_secret(REFRESH_TOKEN_SECRET_ID)?;
-    super::delete_internal_secret("google_client_secret")
+    super::delete_internal_secret(REFRESH_TOKEN_SECRET_ID)
 }
 
 fn fetch_events(
@@ -288,6 +290,12 @@ fn send_token_request(client: &Client, form: &[(&str, String)]) -> Result<TokenR
     if !response.status().is_success() {
         let status = response.status();
         let detail = response.text().unwrap_or_default();
+        if detail.contains("client_secret is missing") {
+            return Err(
+                "Google OAuth 클라이언트 자격증명이 이 빌드에 없습니다. 배포 설정을 확인해주세요."
+                    .into(),
+            );
+        }
         return Err(format!(
             "Google 인증에 실패했습니다. ({status}: {})",
             compact_error(&detail)
@@ -296,6 +304,17 @@ fn send_token_request(client: &Client, form: &[(&str, String)]) -> Result<TokenR
     response
         .json::<TokenResponse>()
         .map_err(|error| format!("Google 인증 응답을 읽지 못했습니다. ({error})"))
+}
+
+fn append_google_client_secret(form: &mut Vec<(&str, String)>) -> Result<(), String> {
+    let secret = GOOGLE_OAUTH_CLIENT_SECRET
+        .map(str::to_owned)
+        .or(super::get_optional_secret("google_client_secret")?)
+        .filter(|value| !value.trim().is_empty());
+    if let Some(secret) = secret {
+        form.push(("client_secret", secret));
+    }
+    Ok(())
 }
 
 fn wait_for_oauth_callback(
@@ -486,7 +505,7 @@ mod tests {
     }
 
     #[test]
-    fn shared_google_client_id_is_a_desktop_client() {
+    fn shared_google_client_id_uses_google_oauth_format() {
         assert!(GOOGLE_OAUTH_CLIENT_ID.ends_with(".apps.googleusercontent.com"));
     }
 }

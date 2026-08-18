@@ -43,7 +43,10 @@ import {
   listJiraTaskLinks,
   refreshAssignedJiraIssues,
 } from "../entities/work-context/api/jira-issue-repository";
-import { autoConnectTaskAiSessions } from "../entities/work-context/api/context-discovery-repository";
+import {
+  autoConnectTaskContext,
+  type DiscoveryProgress,
+} from "../entities/work-context/api/context-discovery-repository";
 import {
   statusMeta,
   workItemStatuses,
@@ -948,6 +951,7 @@ function TaskDetailDrawer({ item, onClose, onChanged }: { item: WorkItem; onClos
   const [development, setDevelopment] = useState<JiraIssueDevelopment[]>([]);
   const [isAutoConnecting, setIsAutoConnecting] = useState(false);
   const [autoConnectMessage, setAutoConnectMessage] = useState<string | null>(null);
+  const [autoConnectProgress, setAutoConnectProgress] = useState<DiscoveryProgress | null>(null);
   const syncedJiraLinksRef = useRef(new Set<string>());
   const drawerRef = useRef<HTMLElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -956,7 +960,7 @@ function TaskDetailDrawer({ item, onClose, onChanged }: { item: WorkItem; onClos
 
   useEffect(() => {
     const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const backgroundRegions = Array.from(document.querySelectorAll<HTMLElement>(".app-shell > .sidebar, .app-shell > .workspace"));
+    const backgroundRegions = Array.from(document.querySelectorAll<HTMLElement>(".app-shell > .app-titlebar, .app-shell > .sidebar, .app-shell > .workspace"));
     const previousAriaHidden = backgroundRegions.map((region) => region.getAttribute("aria-hidden"));
     backgroundRegions.forEach((region) => {
       region.inert = true;
@@ -1099,21 +1103,37 @@ function TaskDetailDrawer({ item, onClose, onChanged }: { item: WorkItem; onClos
     await onChanged();
   }
 
-  async function autoConnectSessions() {
+  async function autoConnectAllContext() {
     setIsAutoConnecting(true);
     setAutoConnectMessage(null);
+    setAutoConnectProgress({ percent: 3, label: "컨텍스트 탐색을 준비하고 있어요" });
     try {
       setError(null);
-      const result = await autoConnectTaskAiSessions(item.id, item.title, item.goal || "");
+      const result = await autoConnectTaskContext(
+        item.id,
+        item.title,
+        item.goal || "",
+        setAutoConnectProgress,
+      );
+      const counts = result.connected.reduce((summary, candidate) => {
+        summary[candidate.source] += 1;
+        return summary;
+      }, { ai_session: 0, jira: 0, slack: 0 });
+      const connectedSummary = [
+        counts.jira ? `Jira ${counts.jira}개` : null,
+        counts.slack ? `Slack ${counts.slack}개` : null,
+        counts.ai_session ? `AI 세션 ${counts.ai_session}개` : null,
+      ].filter(Boolean).join(" · ");
       setAutoConnectMessage(result.connected.length > 0
-        ? `${result.connected.length}개의 관련 세션을 자동으로 연결했습니다.`
-        : "관련도가 충분히 높은 AI 세션을 찾지 못했습니다.");
+        ? `${connectedSummary}를 자동으로 연결했습니다.`
+        : "관련도가 충분히 높은 컨텍스트를 찾지 못했습니다.");
       await refreshContext();
       await onChanged();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setIsAutoConnecting(false);
+      setAutoConnectProgress(null);
     }
   }
 
@@ -1232,6 +1252,18 @@ function TaskDetailDrawer({ item, onClose, onChanged }: { item: WorkItem; onClos
           <button ref={closeButtonRef} type="button" onClick={onClose} aria-label="작업 상세 닫기"><X size={18} strokeWidth={1.8} aria-hidden="true" /></button>
         </header>
 
+        <section className="context-auto-collect" aria-live="polite">
+          <button className="ai-auto-connect" type="button" onClick={() => void autoConnectAllContext()} disabled={isAutoConnecting}>
+            <i><Sparkles size={15} strokeWidth={1.8} aria-hidden="true" /></i>
+            <span>
+              <strong>{isAutoConnecting ? autoConnectProgress?.label || "AI가 관련 컨텍스트를 찾는 중…" : "AI 컨텍스트 자동 수집"}</strong>
+              <small>Task 제목·설명을 분석해 Jira 티켓, Slack 메시지와 AI 세션을 자동으로 연결합니다.</small>
+            </span>
+            <b>{isAutoConnecting ? `${autoConnectProgress?.percent ?? 3}%` : "자동 연결"}</b>
+          </button>
+          {autoConnectMessage && <p className="ai-auto-message">{autoConnectMessage}</p>}
+        </section>
+
         <TaskTargetEditor item={item} onChanged={onChanged} />
 
         <DevelopmentSection development={development} isLoading={isJiraSyncing} />
@@ -1316,12 +1348,6 @@ function TaskDetailDrawer({ item, onClose, onChanged }: { item: WorkItem; onClos
 
         <div className="context-section ai-auto-section">
           <div className="context-section-title"><strong>AI 작업 세션</strong><span>{linkedSessions.length}개 연결됨</span></div>
-          <button className="ai-auto-connect" type="button" onClick={() => void autoConnectSessions()} disabled={isAutoConnecting}>
-            <i><Sparkles size={15} strokeWidth={1.8} aria-hidden="true" /></i>
-            <span><strong>{isAutoConnecting ? "AI가 관련 세션을 찾는 중…" : "AI로 세션 자동 연결"}</strong><small>Task 제목·Description과 최근 대화를 분석해 관련도가 높은 세션만 연결합니다.</small></span>
-            <b>{isAutoConnecting ? "분석 중" : "자동 연결"}</b>
-          </button>
-          {autoConnectMessage && <p className="ai-auto-message">{autoConnectMessage}</p>}
           {linkedSessions.map((session) => (
             <div className="context-link-row" key={`${session.provider}:${session.sessionId}`}>
               <i className={`service ${serviceIconForProvider(session.provider)}`}><ServiceIcon kind={serviceIconForProvider(session.provider)} size={17} /></i>

@@ -30,6 +30,7 @@ jobs:
       APPLE_ID: ${{ secrets.APPLE_ID }}
       APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
       APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      ORBIT_GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.ORBIT_GOOGLE_OAUTH_CLIENT_SECRET }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -60,6 +61,11 @@ jobs:
         shell: bash
         run: |
           bun scripts/check-release-version.ts "$RELEASE_TAG"
+
+          if [[ -z "$ORBIT_GOOGLE_OAUTH_CLIENT_SECRET" ]]; then
+            echo "::error::ORBIT_GOOGLE_OAUTH_CLIENT_SECRET is required for Google Calendar OAuth."
+            exit 1
+          fi
 
           if [[ -n "$APPLE_CERTIFICATE" && -z "$APPLE_CERTIFICATE_PASSWORD" ]]; then
             echo "::error::APPLE_CERTIFICATE_PASSWORD is required when APPLE_CERTIFICATE is configured."

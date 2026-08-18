@@ -105,6 +105,23 @@ fn get_secret(secret_id: &str) -> Result<String, String> {
     }
 }
 
+fn get_optional_secret(secret_id: &str) -> Result<Option<String>, String> {
+    validate_secret_id(secret_id)?;
+    if let Some(value) = cached_secret(secret_id)? {
+        return Ok(Some(value));
+    }
+    match keychain_entry(secret_id)?.get_password() {
+        Ok(value) if !value.is_empty() => {
+            cache_secret(secret_id, &value)?;
+            Ok(Some(value))
+        }
+        Ok(_) | Err(keyring::Error::NoEntry) => Ok(None),
+        Err(error) => Err(format!(
+            "macOS Keychain에서 자격 증명을 읽지 못했습니다. Orbit의 Keychain 접근을 허용해주세요. ({error})"
+        )),
+    }
+}
+
 #[tauri::command]
 fn secret_status(secret_id: String) -> Result<bool, String> {
     validate_secret_id(&secret_id)?;
