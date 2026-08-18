@@ -116,6 +116,22 @@
 .planner-events > div > i { width: 7px; height: 7px; border: 1px solid #d99542; border-radius: 50%; }
 .planner-events strong,.planner-events small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .planner-events strong { font-size: 10px; }.planner-events small { margin-top: 3px; color: var(--text-muted); font-size: 8px; }
+.planner-review-requests { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
+.planner-review-requests > header { display: flex; min-height: 28px; margin-bottom: 6px; align-items: center; justify-content: space-between; }
+.planner-review-requests > header > div { display: flex; align-items: center; gap: 6px; color: var(--accent); }
+.planner-review-requests > header strong { color: var(--text); font-size: 10px; }
+.planner-review-requests > header button { min-height: 27px; padding: 0 6px; color: var(--text-muted); border-color: transparent; background: transparent; font-size: 8px; }
+.planner-review-requests > header button:hover { color: var(--accent); background: var(--accent-soft); }
+.planner-review-requests > header button span { display: inline-grid; min-width: 16px; height: 16px; margin-left: 3px; place-items: center; color: var(--accent); background: var(--accent-soft); border-radius: 8px; }
+.planner-review-request { display: grid; width: 100%; min-height: 52px; padding: 7px 4px; grid-template-columns: minmax(0,1fr) auto 16px; align-items: center; gap: 7px; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; background: transparent; text-align: left; }
+.planner-review-request:hover { background: var(--subtle); }
+.planner-review-request > span { min-width: 0; }
+.planner-review-request strong,.planner-review-request small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.planner-review-request strong { font-size: 10px; }.planner-review-request small { margin-top: 4px; color: var(--text-muted); font-size: 8px; }
+.planner-review-request em { color: var(--accent); font-size: 8px; font-style: normal; font-weight: 700; white-space: nowrap; }
+.planner-review-request > svg { color: var(--text-faint); }
+.planner-review-requests > p { margin: 0; padding: 14px 4px; color: var(--text-muted); font-size: 9px; text-align: center; }
+.planner-review-requests > p.is-error { color: var(--danger); }
 .planner-context-note { display: flex; margin-top: 16px; padding: 11px; align-items: flex-start; gap: 9px; color: var(--accent); background: var(--accent-soft); border-radius: 5px; }
 .planner-context-note > span { min-width: 0; }.planner-context-note strong,.planner-context-note small { display: block; }.planner-context-note strong { font-size: 9px; }.planner-context-note small { margin-top: 4px; color: var(--text-muted); font-size: 8px; line-height: 1.45; }
 

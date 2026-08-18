@@ -67,7 +67,7 @@ import { isTaskSortMode, type TaskSortMode } from "../entities/work-context/mode
 import CalendarPage from "../pages/calendar";
 import SettingsPage from "../pages/settings";
 import WorkspacePage from "../pages/workspace";
-import PullRequestsPage from "../pages/pull-requests";
+import PullRequestsPage, { type PullRequestView } from "../pages/pull-requests";
 import JiraTicketsPage from "../pages/jira-tickets";
 import TaskContextDiscoveryModal from "../features/tasks/task-context-discovery";
 import ChatPage from "../pages/chat";
@@ -138,6 +138,7 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [isComposerOpen, setIsComposerOpen] = useState(false);
   const [isDailyBriefingOpen, setIsDailyBriefingOpen] = useState(false);
+  const [pullRequestInitialView, setPullRequestInitialView] = useState<PullRequestView>("authored");
   const [isDailyBriefingCollecting, setIsDailyBriefingCollecting] = useState(false);
   const [dailyBriefing, setDailyBriefing] = useState<DailyBriefing | null>(null);
   const [dailyBriefingError, setDailyBriefingError] = useState<string | null>(null);
@@ -511,6 +512,10 @@ function App() {
             onComplete={(item) => { void handleMove(item.id, "done"); }}
             onOpenContext={setContextItem}
             onChanged={refresh}
+            onOpenReviewRequests={() => {
+              setPullRequestInitialView("review");
+              navigateTo("pull_requests");
+            }}
             onOpenDailyBriefing={() => {
               setIsDailyBriefingOpen(true);
               if (!dailyBriefing) void refreshDailyBriefing();
@@ -535,7 +540,7 @@ function App() {
         ) : activeSection === "jira" ? (
           <JiraTicketsPage workItems={items} />
         ) : activeSection === "pull_requests" ? (
-          <PullRequestsPage workItems={items} />
+          <PullRequestsPage workItems={items} initialView={pullRequestInitialView} />
         ) : activeSection === "settings" ? (
           <SettingsPage />
         ) : (

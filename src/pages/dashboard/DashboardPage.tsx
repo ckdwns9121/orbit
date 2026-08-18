@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type CSSProperties, type DragEvent, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import {
   AlarmClock,
+  ArrowUpRight,
   ArrowDown,
   ArrowUp,
   Bot,
@@ -11,6 +12,7 @@ import {
   Circle,
   Focus,
   GripVertical,
+  GitPullRequest,
   ListPlus,
   MoreHorizontal,
   Pin,
@@ -22,6 +24,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { listCalendarEvents } from "../../entities/work-context/api/calendar-event-repository";
 import {
   addDailyPriority,
@@ -44,10 +47,19 @@ import {
   materializePlannerRoutines,
 } from "../../entities/work-context/api/planner-repository";
 import { createWorkItem } from "../../entities/work-context/api/work-item-repository";
+import {
+  listCachedPullRequests,
+  refreshPullRequestsFromSessions,
+} from "../../entities/work-context/api/github-pull-request-repository";
 import { isSameDay, type CalendarEvent } from "../../entities/work-context/model/calendar-event";
 import { localDateKey, reorderDailyPriorityIds, unplannedWorkItems, type DailyPlanEntry, type DailyPriority } from "../../entities/work-context/model/daily-plan";
 import { monthGridDays, type PlannerCategory, type PlannerRoutine } from "../../entities/work-context/model/planner";
 import type { WorkItem } from "../../entities/work-context/model/work-item";
+import {
+  pullRequestWaitLabel,
+  reviewRequestedPullRequests,
+  type GitHubPullRequest,
+} from "../../entities/work-context/model/github-pull-request";
 import "./DashboardPage.scss";
 
 const monthLabel = new Intl.DateTimeFormat("ko-KR", { year: "numeric", month: "long" });
@@ -66,6 +78,7 @@ export default function DashboardPage({
   onOpenContext,
   onChanged,
   onOpenDailyBriefing,
+  onOpenReviewRequests,
 }: {
   workItems: WorkItem[];
   onResume: (item: WorkItem) => void;
@@ -73,6 +86,7 @@ export default function DashboardPage({
   onOpenContext: (item: WorkItem) => void;
   onChanged: () => Promise<void>;
   onOpenDailyBriefing: () => void;
+  onOpenReviewRequests: () => void;
 }) {
   const [month, setMonth] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1));
   const [selectedDate, setSelectedDate] = useState(() => new Date());
@@ -93,6 +107,9 @@ export default function DashboardPage({
   const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
   const [isPriorityDragOver, setIsPriorityDragOver] = useState(false);
   const [priorityAnnouncement, setPriorityAnnouncement] = useState("");
+  const [reviewPullRequests, setReviewPullRequests] = useState<GitHubPullRequest[]>([]);
+  const [isReviewPullRequestsLoading, setIsReviewPullRequestsLoading] = useState(true);
+  const [reviewPullRequestsError, setReviewPullRequestsError] = useState<string | null>(null);
   const days = useMemo(() => monthGridDays(month), [month]);
   const rangeStart = localDateKey(days[0]);
   const rangeEnd = localDateKey(days[days.length - 1]);
@@ -128,6 +145,29 @@ export default function DashboardPage({
     setIsLoading(true);
     void refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    let active = true;
+    async function loadReviewPullRequests() {
+      setReviewPullRequestsError(null);
+      try {
+        const cached = await listCachedPullRequests();
+        if (active) {
+          setReviewPullRequests(reviewRequestedPullRequests(cached, cached.length));
+          setIsReviewPullRequestsLoading(false);
+        }
+        await refreshPullRequestsFromSessions();
+        const refreshed = await listCachedPullRequests();
+        if (active) setReviewPullRequests(reviewRequestedPullRequests(refreshed, refreshed.length));
+      } catch (cause) {
+        if (active) setReviewPullRequestsError(cause instanceof Error ? cause.message : String(cause));
+      } finally {
+        if (active) setIsReviewPullRequestsLoading(false);
+      }
+    }
+    void loadReviewPullRequests();
+    return () => { active = false; };
+  }, []);
 
   const currentWorkItemById = new Map(workItems.map((item) => [item.id, item]));
   const selectedEntries = entries
@@ -435,6 +475,23 @@ export default function DashboardPage({
               {selectedEvents.map((event) => <div key={event.id}><i /><span><strong>{event.title}</strong><small>{event.allDay ? "종일" : timeLabel.format(new Date(event.startAt))}{event.location ? ` · ${event.location}` : ""}</small></span></div>)}
             </section>
           )}
+
+          <section className="planner-review-requests" aria-label="현재 리뷰 대기 Pull Request">
+            <header>
+              <div><GitPullRequest size={14} aria-hidden="true" /><strong>리뷰 대기 PR</strong></div>
+              <button type="button" onClick={onOpenReviewRequests}>전체 보기 <span>{reviewPullRequests.length}</span></button>
+            </header>
+            {reviewPullRequests.slice(0, 3).map((pullRequest) => (
+              <button className="planner-review-request" type="button" key={`${pullRequest.repository}#${pullRequest.number}`} onClick={() => void openUrl(pullRequest.url)}>
+                <span><strong>{pullRequest.title}</strong><small>{pullRequest.repository} #{pullRequest.number} · @{pullRequest.authorLogin || "unknown"}</small></span>
+                <em>{pullRequestWaitLabel(pullRequest.updatedAt)}</em>
+                <ArrowUpRight size={13} aria-hidden="true" />
+              </button>
+            ))}
+            {!isReviewPullRequestsLoading && reviewPullRequests.length === 0 && !reviewPullRequestsError && <p>현재 리뷰가 요청된 PR이 없습니다.</p>}
+            {isReviewPullRequestsLoading && reviewPullRequests.length === 0 && <p>리뷰 요청을 확인하고 있어요…</p>}
+            {reviewPullRequestsError && reviewPullRequests.length === 0 && <p className="is-error">PR을 불러오지 못했습니다.</p>}
+          </section>
 
           <div className="planner-context-note"><Sparkles size={15} /><span><strong>업무 컨텍스트는 작업 안에</strong><small>작업을 열면 Jira, PR, Slack, Codex·Claude 세션을 연결할 수 있어요.</small></span></div>
         </aside>

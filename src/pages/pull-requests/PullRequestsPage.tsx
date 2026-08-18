@@ -11,16 +11,16 @@ import { createWorkItemLink } from "../../entities/work-context/api/work-item-li
 import "./PullRequestsPage.scss";
 
 type Filter = "all" | "session" | "linked";
-type PullRequestView = "authored" | "review";
+export type PullRequestView = "authored" | "review";
 const PR_ROW_HEIGHT = 84;
 const PR_OVERSCAN = 5;
 
-export default function PullRequestsPage({ workItems }: { workItems: WorkItem[] }) {
+export default function PullRequestsPage({ workItems, initialView = "authored" }: { workItems: WorkItem[]; initialView?: PullRequestView }) {
   const [pullRequests, setPullRequests] = useState<GitHubPullRequest[]>([]);
   const [links, setLinks] = useState<PullRequestTaskLink[]>([]);
   const [selectedUrl, setSelectedUrl] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>("all");
-  const [view, setView] = useState<PullRequestView>("authored");
+  const [view, setView] = useState<PullRequestView>(initialView);
   const [query, setQuery] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
