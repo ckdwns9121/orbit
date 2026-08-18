@@ -41,13 +41,13 @@ describe("Task context discovery", () => {
     expect([...selected]).toEqual(["strong"]);
   });
 
-  test("자동 연결은 강한 후보 중 상위 세 개만 선택한다", () => {
+  test("자동 연결은 출처와 관계없이 강한 컨텍스트만 상위 세 개까지 선택한다", () => {
     const selected = autoConnectContextCandidates([
       { id: "best", source: "ai_session", title: "최상", detail: "", score: 92, reason: "" },
-      { id: "near", source: "ai_session", title: "유사", detail: "", score: 81, reason: "" },
-      { id: "far", source: "ai_session", title: "낮음", detail: "", score: 70, reason: "" },
+      { id: "near-jira", source: "jira", title: "유사", detail: "", score: 81, reason: "" },
+      { id: "far-slack", source: "slack", title: "낮음", detail: "", score: 70, reason: "" },
       { id: "weak", source: "ai_session", title: "약함", detail: "", score: 42, reason: "" },
     ]);
-    expect(selected.map(({ id }) => id)).toEqual(["best", "near"]);
+    expect(selected.map(({ id }) => id)).toEqual(["best", "near-jira"]);
   });
 });

@@ -34,6 +34,8 @@ export interface AutoConnectAiResult {
   notices: string[];
 }
 
+export type AutoConnectContextResult = AutoConnectAiResult;
+
 interface AiRankedCandidate {
   id: string;
   score: number;
@@ -168,6 +170,22 @@ export async function connectTaskContext(taskId: string, candidates: ContextCand
       });
     }
   }
+}
+
+export async function autoConnectTaskContext(
+  taskId: string,
+  taskTitle: string,
+  taskDescription = "",
+  onProgress: (progress: DiscoveryProgress) => void = () => undefined,
+): Promise<AutoConnectContextResult> {
+  const discovery = await discoverTaskContext(taskTitle, taskDescription, onProgress);
+  const connected = autoConnectContextCandidates(discovery.candidates);
+  await connectTaskContext(taskId, connected);
+  return {
+    connected,
+    usedAi: discovery.usedAi,
+    notices: discovery.notices,
+  };
 }
 
 export async function autoConnectTaskAiSessions(
