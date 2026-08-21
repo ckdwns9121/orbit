@@ -475,6 +475,7 @@ select:focus, input:focus, textarea:focus { border-color: var(--ring); box-shado
 .task-context-modal > header small { display: block; margin-top: 7px; color: var(--text-faint); font-size: 9px; }
 .task-context-modal > header button { display: grid; place-items: center; flex-shrink: 0; min-width: 30px; padding: 0; border: 0; background: transparent; }
 .context-auto-collect { margin-top: 16px; }
+.task-workflow-loading { margin-top: 16px; padding: 16px; color: var(--text-muted); border: 1px solid var(--border); border-radius: 6px; font-size: 9px; }
 .task-target-editor { margin-top: 16px; padding: 12px; border: 1px solid var(--border); border-radius: 4px; background: var(--subtle); }
 .task-target-heading { display: flex; align-items: center; gap: 9px; }
 .task-target-heading > i { display: grid; flex: 0 0 30px; width: 30px; height: 30px; place-items: center; color: var(--accent); border: 1px solid var(--border); border-radius: 7px; background: var(--surface); font-style: normal; }

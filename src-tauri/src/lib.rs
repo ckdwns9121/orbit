@@ -21,6 +21,7 @@ mod local_ai_sessions;
 mod openai_chat;
 mod slack;
 mod task_prioritization;
+mod task_workflow;
 
 const KEYCHAIN_SERVICE: &str = "com.orbit.desktop";
 static SECRET_CACHE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
@@ -395,6 +396,12 @@ pub fn run() {
             sql: include_str!("../migrations/0032_chat_agent_runs.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 33,
+            description: "create_task_workflow_documents",
+            sql: include_str!("../migrations/0033_task_workflow_documents.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()
@@ -474,6 +481,7 @@ pub fn run() {
             openai_chat::stream_chat_with_orbit_context,
             openai_chat::plan_chat_tools,
             openai_chat::run_chat_agent_step,
+            task_workflow::generate_task_workflow_plan,
             openai_chat::cancel_chat_stream,
             task_prioritization::prioritize_work_items
         ])

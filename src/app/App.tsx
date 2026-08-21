@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   AlarmClock,
@@ -112,6 +112,7 @@ const TASK_SORT_STORAGE_KEY = "orbit.task-sort";
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "orbit.sidebar-collapsed";
 const OPEN_SECTIONS_STORAGE_KEY = "orbit.open-sections";
 const ACTIVE_SECTION_STORAGE_KEY = "orbit.active-section";
+const TaskWorkflow = lazy(() => import("../features/tasks/task-workflow"));
 
 function formatWorkItemCreatedAt(value: string) {
   return new Intl.DateTimeFormat("ko-KR", {
@@ -1268,6 +1269,10 @@ function TaskDetailDrawer({ item, onClose, onChanged }: { item: WorkItem; onClos
           </button>
           {autoConnectMessage && <p className="ai-auto-message">{autoConnectMessage}</p>}
         </section>
+
+        <Suspense fallback={<section className="task-workflow-loading">실행 워크플로를 불러오고 있어요…</section>}>
+          <TaskWorkflow item={item} links={links} sessions={linkedSessions} development={development} />
+        </Suspense>
 
         <TaskTargetEditor item={item} onChanged={onChanged} />
 
