@@ -58,6 +58,27 @@ test("planner categories and routines preserve Task ownership", () => {
   database.close();
 });
 
+test("Task workflow documents persist structured progress and follow Task deletion", () => {
+  const database = migratedDatabase();
+  insertTask(database, "workflow-task");
+  database.query(`INSERT INTO work_item_workflows(
+    work_item_id, plan_json, progress_json, source_snapshot_json, model,
+    generated_at, updated_at
+  ) VALUES ('workflow-task', ?, ?, ?, 'gpt-test', '2026-08-21', '2026-08-21')`).run(
+    JSON.stringify({ requirementSummary: "요구", frontendImpact: "영향", files: [], implementationChecklist: ["구현"], testChecklist: ["검증"], openQuestions: [] }),
+    JSON.stringify({ approvedAt: null, implementationDone: [], questionAnswers: {}, verification: {} }),
+    JSON.stringify([{ kind: "jira", label: "CGKR-1", url: null }]),
+  );
+  expect(database.query("SELECT revision, model FROM work_item_workflows WHERE work_item_id='workflow-task'").get())
+    .toEqual({ revision: 1, model: "gpt-test" });
+  expect(() => database.query(`UPDATE work_item_workflows SET plan_json='not-json' WHERE work_item_id='workflow-task'`).run())
+    .toThrow();
+  database.query("DELETE FROM work_items WHERE id='workflow-task'").run();
+  expect(database.query("SELECT COUNT(*) AS count FROM work_item_workflows").get()).toEqual({ count: 0 });
+  expect(database.query("PRAGMA foreign_key_check").all()).toEqual([]);
+  database.close();
+});
+
 test("daily priorities keep at most three ranked tasks per day", () => {
   const database = migratedDatabase();
   for (const id of ["a", "b", "c", "d"]) insertTask(database, id);
